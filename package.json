@@ -1,0 +1,17 @@
+{
+  "name": "prism-client",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.8.0",
+    "vite": "^8.2.2"
+  },
+  "devDependencies": {
+    "vite-plugin-static-copy": "^4.1.1"
+  }
+}

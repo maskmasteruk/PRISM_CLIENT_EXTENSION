@@ -1,3 +1,5 @@
+import { sanitizeScreenshot } from "./sanitize.js";
+
 const CATEGORIES = [
     "email",
     "username",
@@ -52,6 +54,8 @@ let secrets = [];
 let editingKey = "";
 let agentRunning = false;
 const userInputs = {};
+
+let previousMessages = [];
 
 function hasChromeStorage() {
     return typeof chrome !== "undefined" && Boolean(chrome.storage?.local);
@@ -409,7 +413,7 @@ function executeScript(tabId, func, args = []) {
 
 function captureScreenshotBase64(windowId) {
     return new Promise((resolve, reject) => {
-        chrome.tabs.captureVisibleTab(windowId, { format: "png" }, (dataUrl) => {
+        chrome.tabs.captureVisibleTab(windowId, { format: "png" }, async (dataUrl) => {
             const error = chrome.runtime?.lastError;
 
             if (error) {
@@ -417,8 +421,18 @@ function captureScreenshotBase64(windowId) {
                 return;
             }
 
-            const commaIndex = dataUrl.indexOf(",");
-            resolve(commaIndex === -1 ? dataUrl : dataUrl.slice(commaIndex + 1));
+            try {
+                const sanitizedCanvas = await sanitizeScreenshot(dataUrl);
+
+                const sanitizedDataUrl = sanitizedCanvas.toDataURL("image/png");
+
+                const commaIndex = sanitizedDataUrl.indexOf(",");
+                const base64Data = commaIndex === -1 ? sanitizedDataUrl : sanitizedDataUrl.slice(commaIndex + 1);
+
+                resolve(base64Data);
+            } catch (err) {
+                reject(new Error(`Failed to sanitize screenshot: ${err.message}`));
+            }
         });
     });
 }
@@ -859,6 +873,7 @@ async function callAgent({ requestId, query, browser, screenshotBase64 }) {
         browser,
         available_secrets: buildAvailableSecrets(),
         user_inputs: buildUserInputs(),
+        previous_messages: previousMessages,
         screenshot_base64: screenshotBase64,
     };
 
@@ -936,6 +951,15 @@ function agentCompletionText(response) {
         "Agent finished.";
 }
 
+function trackPreviousMessage(messageText) {
+    if (messageText) {
+        previousMessages.push({
+            role: "assistant",
+            message: messageText,
+        });
+    }
+}
+
 async function runBrowserAgent(query) {
     if (!hasBrowserAgentApis()) {
         throw new Error("PRISM must be run from the Chrome extension popup on an active web page.");
@@ -968,6 +992,10 @@ async function runBrowserAgent(query) {
         const actions = Array.isArray(response?.actions) ? response.actions : [];
 
         screenshotBase64 = null;
+
+        if (response?.message) {
+            trackPreviousMessage(response.message);
+        }
 
         if (status === "error") {
             appendMessage("received", `Agent returned an error:\n${response.error || "Unknown error"}`);
