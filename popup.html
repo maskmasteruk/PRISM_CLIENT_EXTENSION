@@ -31,6 +31,22 @@
                 <textarea id="messageInput" placeholder="Ask PRISM" autocomplete="off"></textarea>
                 <button class="primary" id="send" type="button" title="Send">Send</button>
             </div>
+
+            <div class="screenshot-option">
+                <label class="screenshot-toggle">
+                    <input type="checkbox" id="attachScreenshot">
+                    <span class="toggle-slider"></span>
+                    <span class="toggle-label">Attach screenshot</span>
+                </label>
+
+                <span
+                        class="screenshot-status"
+                        id="screenshotStatus"
+                        title="When disabled, screenshots are captured only when the agent requests one."
+                >
+            On request only
+        </span>
+            </div>
         </div>
     </main>
 

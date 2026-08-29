@@ -32,6 +32,8 @@ const elements = {
     chat: $("chat"),
     messageInput: $("messageInput"),
     send: $("send"),
+    attachScreenshot: $("attachScreenshot"),
+    screenshotStatus: $("screenshotStatus"),
     secretSearch: $("secretSearch"),
     addSecret: $("addSecret"),
     exportSecrets: $("exportSecrets"),
@@ -56,6 +58,9 @@ let agentRunning = false;
 const userInputs = {};
 
 let previousMessages = [];
+
+const SCREENSHOT_SETTING_KEY = "prism.attachScreenshot";
+let attachScreenshot = false;
 
 function hasChromeStorage() {
     return typeof chrome !== "undefined" && Boolean(chrome.storage?.local);
@@ -982,14 +987,33 @@ async function runBrowserAgent(query) {
         tab = await waitForTabReady(tab.id);
 
         const browser = await buildBrowserContext(tab);
+
+        // When enabled, capture a fresh screenshot before every
+        // request to the agent server.
+        if (attachScreenshot) {
+            try {
+                screenshotBase64 = await takeScreenshotBase64(tab);
+            } catch (error) {
+                appendMessage(
+                    "received",
+                    `Screenshot capture failed: ${error.message}`
+                );
+
+                screenshotBase64 = null;
+            }
+        }
+
         const response = await callAgent({
             requestId,
             query,
             browser,
             screenshotBase64,
         });
+
         const status = response?.status;
-        const actions = Array.isArray(response?.actions) ? response.actions : [];
+        const actions = Array.isArray(response?.actions)
+            ? response.actions
+            : [];
 
         screenshotBase64 = null;
 
@@ -1348,6 +1372,51 @@ function bindEvents() {
         elements.secretValue.type = isHidden ? "text" : "password";
         elements.toggleReveal.textContent = isHidden ? "Hide" : "Reveal";
     });
+    elements.attachScreenshot.addEventListener("change", async () => {
+        attachScreenshot = elements.attachScreenshot.checked;
+
+        try {
+            await saveScreenshotSetting();
+        } catch (error) {
+            // Revert the checkbox if local storage fails.
+            attachScreenshot = !attachScreenshot;
+            elements.attachScreenshot.checked = attachScreenshot;
+            updateScreenshotStatus();
+
+            appendMessage(
+                "received",
+                `Unable to save screenshot setting: ${error.message}`
+            );
+        }
+    });
+}
+
+async function loadScreenshotSetting() {
+    const stored = await storageGetAll();
+    const value = stored[SCREENSHOT_SETTING_KEY];
+
+    attachScreenshot = value === true || value === "true";
+
+    if (elements.attachScreenshot) {
+        elements.attachScreenshot.checked = attachScreenshot;
+    }
+
+    updateScreenshotStatus();
+}
+
+async function saveScreenshotSetting() {
+    await storageSet(SCREENSHOT_SETTING_KEY, attachScreenshot);
+    updateScreenshotStatus();
+}
+
+function updateScreenshotStatus() {
+    if (!elements.screenshotStatus) {
+        return;
+    }
+
+    elements.screenshotStatus.textContent = attachScreenshot
+        ? "Attached every request"
+        : "On request only";
 }
 
 async function init() {
@@ -1355,13 +1424,18 @@ async function init() {
     bindEvents();
 
     try {
+        await loadScreenshotSetting();
         await loadSecrets();
         renderSecrets();
     } catch (error) {
-        elements.secretList.textContent = `Unable to read local storage: ${error.message}`;
+        elements.secretList.textContent =
+            `Unable to initialize PRISM: ${error.message}`;
     }
 
-    appendMessage("received", "Enter a prompt to run PRISM on the active tab.");
+    appendMessage(
+        "received",
+        "Enter a prompt to run PRISM on the active tab."
+    );
 }
 
 init();
