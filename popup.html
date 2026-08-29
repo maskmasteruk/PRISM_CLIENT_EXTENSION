@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PRISM</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="libs/tesseract.min.js"></script>
+    <script src="libs/ort.min.js"></script>
+</head>
+<body>
+<div class="app">
+    <header class="topbar">
+        <div class="brand">
+            <div class="logo" aria-hidden="true"><img src="icons/icon16.png" alt="Logo"></div>
+            <div>
+                <div class="title">PRISM</div>
+                <div class="subtitle">Privacy-preserving agent</div>
+            </div>
+        </div>
+        <div class="tabs" role="tablist" aria-label="Popup sections">
+            <button class="tab active" id="agentTab" type="button">Agent</button>
+            <button class="tab" id="privateTab" type="button">Sensitive</button>
+        </div>
+    </header>
+
+    <main class="view active" id="agentView">
+        <div class="chat" id="chat" aria-live="polite"></div>
+        <div class="input-area">
+            <div class="input-box">
+                <textarea id="messageInput" placeholder="Ask PRISM" autocomplete="off"></textarea>
+                <button class="primary" id="send" type="button" title="Send">Send</button>
+            </div>
+        </div>
+    </main>
+
+    <main class="view" id="privateView">
+        <section class="section-intro">
+            <h1>Sensitive information</h1>
+            <p>Secret values are stored locally and are never sent to the server. The agent can only send keys or opaque references.</p>
+        </section>
+
+        <section class="toolbar">
+            <input id="secretSearch" type="search" placeholder="Search keys">
+            <button class="primary" id="addSecret" type="button">Add Secret</button>
+            <button class="secondary" id="exportSecrets" type="button">Export</button>
+            <button class="secondary" id="importSecrets" type="button">Import</button>
+            <input class="hidden" id="importSecretsFile" type="file" accept="application/json,.json">
+        </section>
+
+        <section class="secret-list" id="secretList" aria-live="polite"></section>
+
+        <form class="secret-form hidden" id="secretForm">
+            <input type="hidden" id="secretId">
+            <label>
+                Key
+                <input id="secretKey" required placeholder="email">
+            </label>
+            <label>
+                Value
+                <div class="secret-value-row">
+                    <input id="secretValue" required type="password" autocomplete="off" placeholder="Stored locally">
+                    <button class="secondary" id="toggleReveal" type="button">Reveal</button>
+                </div>
+            </label>
+            <label>
+                Category
+                <select id="secretCategory"></select>
+            </label>
+            <label>
+                Description
+                <input id="secretDescription" placeholder="Optional">
+            </label>
+            <div class="form-actions">
+                <button class="primary" id="saveSecret" type="submit">Save</button>
+                <button class="secondary" id="cancelSecret" type="button">Cancel</button>
+                <button id="deleteSecret" class="danger hidden" type="button">Delete</button>
+            </div>
+        </form>
+
+        <button class="danger clear-button" id="clearSecrets" type="button">Clear All Secrets</button>
+    </main>
+
+</div>
+
+<script type="module" src="popup.js"></script>
+</body>
+</html>
