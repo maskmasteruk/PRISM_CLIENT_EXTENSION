@@ -1,5 +1,3 @@
-import { sanitizeScreenshot } from "./sanitize.js";
-
 const CATEGORIES = [
     "email",
     "username",
@@ -17,10 +15,16 @@ const LEGACY_COLLECTION_KEYS = new Set([
     "prismSensitiveData",
 ]);
 
-const AGENT_URL = "http://127.0.0.1:8000/agent";
-const MAX_AGENT_STEPS = 20;
-const AGENT_ACTION_SETTLE_MS = 500;
-const AGENT_REQUEST_TIMEOUT_MS = 120000;
+const SCREENSHOT_SETTING_KEY = "prism.attachScreenshot";
+const CHAT_STORAGE_KEY = "prism.chatMessages";
+const AGENT_STATE_STORAGE_KEY = "prism.agentState";
+const APP_STORAGE_KEYS = new Set([
+    ...LEGACY_COLLECTION_KEYS,
+    SCREENSHOT_SETTING_KEY,
+    CHAT_STORAGE_KEY,
+    AGENT_STATE_STORAGE_KEY,
+]);
+const MISSING_RECEIVER_MESSAGE = "Receiving end does not exist";
 
 const $ = (id) => document.getElementById(id);
 
@@ -30,8 +34,11 @@ const elements = {
     agentView: $("agentView"),
     privateView: $("privateView"),
     chat: $("chat"),
+    agentStatus: $("agentStatus"),
     messageInput: $("messageInput"),
     send: $("send"),
+    stopAgent: $("stopAgent"),
+    clearChats: $("clearChats"),
     attachScreenshot: $("attachScreenshot"),
     screenshotStatus: $("screenshotStatus"),
     secretSearch: $("secretSearch"),
@@ -55,11 +62,7 @@ const elements = {
 let secrets = [];
 let editingKey = "";
 let agentRunning = false;
-const userInputs = {};
-
-let previousMessages = [];
-
-const SCREENSHOT_SETTING_KEY = "prism.attachScreenshot";
+let chatMessages = [];
 let attachScreenshot = false;
 
 function hasChromeStorage() {
@@ -86,7 +89,12 @@ function storageGetAll() {
             const error = chrome.runtime?.lastError;
 
             if (error) {
-                reject(new Error(error.message));
+                const message = String(error.message || "");
+                const backgroundUnavailable = message.includes("Receiving end does not exist");
+
+                reject(new Error(backgroundUnavailable
+                    ? "PRISM background worker is not available. Reload the extension in chrome://extensions and make sure the loaded extension folder contains background.js."
+                    : message));
                 return;
             }
 
@@ -133,6 +141,51 @@ function storageRemove(keys) {
             }
 
             resolve();
+        });
+    });
+}
+
+function hasRuntimeMessaging() {
+    return typeof chrome !== "undefined" && Boolean(chrome.runtime?.sendMessage);
+}
+
+function isMissingMessageReceiver(error) {
+    return error?.code === "PRISM_BACKGROUND_UNAVAILABLE" ||
+        String(error?.message || error || "").includes(MISSING_RECEIVER_MESSAGE);
+}
+
+function backgroundUnavailableMessage() {
+    return "PRISM background worker is not responding. Reload the extension in chrome://extensions, then reopen the popup.";
+}
+
+function backgroundUnavailableError() {
+    const error = new Error(backgroundUnavailableMessage());
+    error.code = "PRISM_BACKGROUND_UNAVAILABLE";
+    return error;
+}
+
+function sendRuntimeMessage(message) {
+    if (!hasRuntimeMessaging()) {
+        return Promise.reject(new Error("PRISM must be run from the Chrome extension popup."));
+    }
+
+    return new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage(message, (response) => {
+            const error = chrome.runtime?.lastError;
+
+            if (error) {
+                reject(isMissingMessageReceiver(error)
+                    ? backgroundUnavailableError()
+                    : new Error(error.message));
+                return;
+            }
+
+            if (response && response.ok === false) {
+                reject(new Error(response.error || "Background agent request failed."));
+                return;
+            }
+
+            resolve(response);
         });
     });
 }
@@ -185,7 +238,7 @@ function normalizeCategory(category, key = "", value = "") {
 }
 
 function normalizeRecord(key, storedValue) {
-    if (!key || LEGACY_COLLECTION_KEYS.has(key)) {
+    if (!key || APP_STORAGE_KEYS.has(key)) {
         return null;
     }
 
@@ -210,7 +263,7 @@ function normalizeRecord(key, storedValue) {
 function normalizeImportedRecord(key, storedValue) {
     const safeKey = stringifyValue(key).trim();
 
-    if (!safeKey || LEGACY_COLLECTION_KEYS.has(safeKey)) {
+    if (!safeKey || APP_STORAGE_KEYS.has(safeKey)) {
         return null;
     }
 
@@ -302,11 +355,99 @@ function setActiveView(viewName) {
     elements.privateView.classList.toggle("active", showSensitive);
 }
 
-function appendMessage(type, text) {
+function normalizeChatMessages(value) {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+
+    return value
+        .filter((message) => message && typeof message === "object")
+        .map((message) => {
+            const normalized = {
+                id: stringifyValue(message.id || makeRequestId()),
+                type: message.type === "sent" ? "sent" : "received",
+                text: stringifyValue(message.text ?? message.message ?? ""),
+                createdAt: Number(message.createdAt || Date.now()),
+                includeInAgentHistory: message.includeInAgentHistory !== false,
+            };
+            const imageDataUrl = normalizeImageDataUrl(message.imageDataUrl);
+
+            if (imageDataUrl) {
+                normalized.imageDataUrl = imageDataUrl;
+            }
+
+            return normalized;
+        })
+        .filter((message) => message.text || message.imageDataUrl);
+}
+
+function normalizeImageDataUrl(value) {
+    const dataUrl = stringifyValue(value);
+
+    return dataUrl.startsWith("data:image/") ? dataUrl : "";
+}
+
+function createMessageElement(chatMessage) {
     const message = document.createElement("div");
-    message.className = `message ${type}`;
-    message.textContent = text;
-    elements.chat.appendChild(message);
+    message.className = `message ${chatMessage.type}${chatMessage.imageDataUrl ? " has-image" : ""}`;
+
+    if (chatMessage.text) {
+        const text = document.createElement("div");
+        text.className = "message-text";
+        text.textContent = chatMessage.text;
+        message.appendChild(text);
+    }
+
+    if (chatMessage.imageDataUrl) {
+        const image = document.createElement("img");
+        image.className = "message-image";
+        image.src = chatMessage.imageDataUrl;
+        image.alt = chatMessage.text || "Screenshot sent to server";
+        image.loading = "lazy";
+        message.appendChild(image);
+    }
+
+    return message;
+}
+
+function appendMessage(type, text, options = {}) {
+    elements.chat.appendChild(createMessageElement({
+        type: type === "sent" ? "sent" : "received",
+        text: stringifyValue(text),
+        imageDataUrl: normalizeImageDataUrl(options.imageDataUrl),
+    }));
+    elements.chat.scrollTop = elements.chat.scrollHeight;
+}
+
+async function appendStoredMessage(type, text) {
+    const nextMessages = normalizeChatMessages(chatMessages);
+
+    nextMessages.push({
+        id: makeRequestId(),
+        type: type === "sent" ? "sent" : "received",
+        text: stringifyValue(text),
+        createdAt: Date.now(),
+    });
+
+    chatMessages = nextMessages.slice(-200);
+
+    await storageSet(CHAT_STORAGE_KEY, chatMessages);
+    renderChat(chatMessages);
+}
+
+function renderChat(messages) {
+    chatMessages = normalizeChatMessages(messages);
+    elements.chat.replaceChildren();
+
+    if (chatMessages.length === 0) {
+        appendMessage("received", "Enter a prompt to run PRISM on the active tab.");
+        return;
+    }
+
+    chatMessages.forEach((message) => {
+        elements.chat.appendChild(createMessageElement(message));
+    });
+
     elements.chat.scrollTop = elements.chat.scrollHeight;
 }
 
@@ -318,749 +459,32 @@ function makeRequestId() {
     return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function hasBrowserAgentApis() {
-    return typeof chrome !== "undefined" &&
-        Boolean(chrome.tabs?.query) &&
-        Boolean(chrome.tabs?.get) &&
-        Boolean(chrome.tabs?.captureVisibleTab) &&
-        Boolean(chrome.scripting?.executeScript);
-}
+function setAgentRunning(stateOrRunning) {
+    const state = typeof stateOrRunning === "object"
+        ? stateOrRunning
+        : { running: Boolean(stateOrRunning), status: stateOrRunning ? "running" : "idle" };
+    const running = Boolean(state.running);
+    const status = state.status || (running ? "running" : "idle");
 
-function sleep(milliseconds) {
-    return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
-}
-
-function setAgentRunning(running) {
     agentRunning = running;
     elements.send.disabled = running;
     elements.messageInput.disabled = running;
     elements.send.textContent = running ? "Running" : "Send";
-}
 
-function getActiveTab() {
-    return new Promise((resolve, reject) => {
-        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-            const error = chrome.runtime?.lastError;
-
-            if (error) {
-                reject(new Error(error.message));
-                return;
-            }
-
-            const tab = tabs?.[0];
-
-            if (!tab?.id) {
-                reject(new Error("No active tab is available."));
-                return;
-            }
-
-            resolve(tab);
-        });
-    });
-}
-
-function getTab(tabId) {
-    return new Promise((resolve, reject) => {
-        chrome.tabs.get(tabId, (tab) => {
-            const error = chrome.runtime?.lastError;
-
-            if (error) {
-                reject(new Error(error.message));
-                return;
-            }
-
-            resolve(tab);
-        });
-    });
-}
-
-async function waitForTabReady(tabId, timeoutMs = 8000) {
-    const startedAt = Date.now();
-
-    while (Date.now() - startedAt < timeoutMs) {
-        const tab = await getTab(tabId);
-
-        if (tab.status !== "loading") {
-            return tab;
-        }
-
-        await sleep(250);
+    if (elements.stopAgent) {
+        elements.stopAgent.disabled = !running || status === "stopping";
+        elements.stopAgent.textContent = status === "stopping" ? "Stopping" : "Stop";
     }
 
-    return getTab(tabId);
-}
+    if (elements.agentStatus) {
+        const statusText = running
+            ? status.charAt(0).toUpperCase() + status.slice(1).replace(/_/g, " ")
+            : "Idle";
 
-function isScriptableTab(tab) {
-    return Boolean(tab?.id) && /^(https?:|file:)/.test(tab.url || "");
-}
-
-function executeScript(tabId, func, args = []) {
-    return new Promise((resolve, reject) => {
-        chrome.scripting.executeScript(
-            {
-                target: { tabId },
-                func,
-                args,
-            },
-            (results) => {
-                const error = chrome.runtime?.lastError;
-
-                if (error) {
-                    reject(new Error(error.message));
-                    return;
-                }
-
-                resolve(results?.[0]?.result);
-            }
-        );
-    });
-}
-
-function captureScreenshotBase64(windowId) {
-    return new Promise((resolve, reject) => {
-        chrome.tabs.captureVisibleTab(windowId, { format: "png" }, async (dataUrl) => {
-            const error = chrome.runtime?.lastError;
-
-            if (error) {
-                reject(new Error(error.message));
-                return;
-            }
-
-            try {
-                const sanitizedCanvas = await sanitizeScreenshot(dataUrl);
-
-                const sanitizedDataUrl = sanitizedCanvas.toDataURL("image/png");
-
-                const commaIndex = sanitizedDataUrl.indexOf(",");
-                const base64Data = commaIndex === -1 ? sanitizedDataUrl : sanitizedDataUrl.slice(commaIndex + 1);
-
-                resolve(base64Data);
-            } catch (err) {
-                reject(new Error(`Failed to sanitize screenshot: ${err.message}`));
-            }
-        });
-    });
-}
-
-function extractDomInPage() {
-    const elements = [];
-    let counter = 0;
-    const interactiveSelectors = [
-        "a",
-        "button",
-        "input",
-        "textarea",
-        "select",
-        "[role]",
-        "[contenteditable='true']",
-        "[onclick]",
-    ];
-    const nodes = document.querySelectorAll(interactiveSelectors.join(","));
-    const usedIds = new Set(
-        Array.from(document.querySelectorAll("[data-agent-id]"))
-            .map((element) => element.getAttribute("data-agent-id"))
-            .filter(Boolean)
-    );
-
-    function rectIntersectsViewport(rect) {
-        return rect.width > 0 &&
-            rect.height > 0 &&
-            rect.bottom > 0 &&
-            rect.right > 0 &&
-            rect.top < window.innerHeight &&
-            rect.left < window.innerWidth;
+        elements.agentStatus.textContent = statusText;
+        elements.agentStatus.classList.toggle("running", running);
+        elements.agentStatus.title = state.tabTitle || state.tabUrl || statusText;
     }
-
-    function isRendered(element) {
-        for (let current = element; current; current = current.parentElement) {
-            const style = window.getComputedStyle(current);
-
-            if (style.display === "none" ||
-                style.visibility === "hidden" ||
-                style.visibility === "collapse" ||
-                Number(style.opacity || 1) <= 0) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    function isElementVisibleInViewport(element, rect = element.getBoundingClientRect()) {
-        return rectIntersectsViewport(rect) && isRendered(element);
-    }
-
-    function isTextNodeVisibleInViewport(node) {
-        if (!node.parentElement || !isRendered(node.parentElement)) {
-            return false;
-        }
-
-        const range = document.createRange();
-        range.selectNodeContents(node);
-
-        const visible = Array.from(range.getClientRects()).some(rectIntersectsViewport);
-        range.detach?.();
-
-        return visible;
-    }
-
-    function visibleTextFor(element, maxLength) {
-        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-        const parts = [];
-        let length = 0;
-        let node = walker.nextNode();
-
-        while (node && length < maxLength) {
-            const text = String(node.textContent || "").replace(/\s+/g, " ").trim();
-
-            if (text && isTextNodeVisibleInViewport(node)) {
-                parts.push(text);
-                length += text.length + 1;
-            }
-
-            node = walker.nextNode();
-        }
-
-        return parts.join(" ").replace(/\s+/g, " ").trim().slice(0, maxLength);
-    }
-
-    function visiblePlaceholderFor(element) {
-        const placeholder = element.getAttribute("placeholder");
-
-        if (!placeholder) {
-            return null;
-        }
-
-        return "value" in element && String(element.value || "").length > 0
-            ? null
-            : placeholder;
-    }
-
-    function visibleLabelFor(element) {
-        if (!element.labels?.length) {
-            return null;
-        }
-
-        return Array.from(element.labels)
-            .filter((labelElement) => isElementVisibleInViewport(labelElement))
-            .map((labelElement) => visibleTextFor(labelElement, 200))
-            .filter(Boolean)
-            .join(" ");
-    }
-
-    function nextAgentId() {
-        let agentId = "";
-
-        do {
-            agentId = `agent-${counter}`;
-            counter += 1;
-        } while (usedIds.has(agentId));
-
-        usedIds.add(agentId);
-        return agentId;
-    }
-
-    for (const el of nodes) {
-        const rect = el.getBoundingClientRect();
-        const visible = isElementVisibleInViewport(el, rect);
-
-        if (!visible) {
-            continue;
-        }
-
-        let agentId = el.getAttribute("data-agent-id");
-
-        if (!agentId) {
-            agentId = nextAgentId();
-            el.setAttribute("data-agent-id", agentId);
-        }
-
-        const tag = el.tagName.toLowerCase();
-        const type = el.getAttribute("type");
-        const label = visibleLabelFor(el);
-        const ariaLabel = el.getAttribute("aria-label");
-        const placeholder = visiblePlaceholderFor(el);
-        const name = el.getAttribute("name");
-        const role = el.getAttribute("role");
-        const text = visibleTextFor(el, 1000);
-        const href = el.getAttribute("href");
-        let maskedValue = null;
-
-        if (tag === "input" || tag === "textarea" || tag === "select") {
-            const value = el.value || "";
-            maskedValue = value.length > 0 ? (label || name || "[MASKED]") : "";
-        }
-
-        const item = {
-            id: agentId,
-            tag,
-            disabled: Boolean(el.disabled),
-            visible: true,
-        };
-        const optionalValues = {
-            type,
-            label,
-            aria_label: ariaLabel,
-            placeholder,
-            name,
-            role,
-            text,
-            masked_value: maskedValue,
-            href,
-            checked: typeof el.checked === "boolean" ? el.checked : null,
-            selected: typeof el.selected === "boolean" ? el.selected : null,
-        };
-
-        for (const [key, value] of Object.entries(optionalValues)) {
-            if (value !== null && value !== undefined && value !== "") {
-                item[key] = value;
-            }
-        }
-
-        elements.push(item);
-    }
-
-    return {
-        url: window.location.href,
-        title: document.title,
-        viewport_width: window.innerWidth,
-        viewport_height: window.innerHeight,
-        elements,
-    };
-}
-
-function executeAgentActionInPage(action, secretValue) {
-    const actionType = action.type;
-
-    function findElement(elementId) {
-        if (!elementId) {
-            return null;
-        }
-
-        if (window.CSS?.escape) {
-            return document.querySelector(`[data-agent-id="${CSS.escape(elementId)}"]`);
-        }
-
-        return Array.from(document.querySelectorAll("[data-agent-id]"))
-            .find((element) => element.getAttribute("data-agent-id") === elementId) || null;
-    }
-
-    function getElement(elementId) {
-        const element = findElement(elementId);
-
-        if (!element) {
-            throw new Error(`Element not found: ${elementId}`);
-        }
-
-        return element;
-    }
-
-    function centerOf(element) {
-        const rect = element.getBoundingClientRect();
-        return {
-            clientX: rect.left + rect.width / 2,
-            clientY: rect.top + rect.height / 2,
-        };
-    }
-
-    function bringIntoView(element) {
-        element.scrollIntoView({ block: "center", inline: "center" });
-    }
-
-    function setElementValue(element, value) {
-        const textValue = String(value ?? "");
-
-        bringIntoView(element);
-
-        if (element.isContentEditable) {
-            element.focus();
-            document.execCommand("selectAll", false, null);
-            document.execCommand("insertText", false, textValue);
-            element.dispatchEvent(new InputEvent("input", { bubbles: true, data: textValue }));
-            element.dispatchEvent(new Event("change", { bubbles: true }));
-            return;
-        }
-
-        if (!("value" in element)) {
-            throw new Error("Target element does not accept text input.");
-        }
-
-        element.focus();
-
-        const prototype = Object.getPrototypeOf(element);
-        const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
-
-        if (descriptor?.set) {
-            descriptor.set.call(element, textValue);
-        } else {
-            element.value = textValue;
-        }
-
-        element.dispatchEvent(new InputEvent("input", { bubbles: true, data: textValue }));
-        element.dispatchEvent(new Event("change", { bubbles: true }));
-    }
-
-    function dispatchHover(element) {
-        bringIntoView(element);
-        const center = centerOf(element);
-        element.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, ...center }));
-        element.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, ...center }));
-    }
-
-    function focusNextElement(backward = false) {
-        const focusable = Array.from(document.querySelectorAll([
-            "a[href]",
-            "button",
-            "input",
-            "textarea",
-            "select",
-            "[tabindex]:not([tabindex='-1'])",
-            "[contenteditable='true']",
-        ].join(","))).filter((element) => {
-            const rect = element.getBoundingClientRect();
-            const style = window.getComputedStyle(element);
-            return rect.width > 0 &&
-                rect.height > 0 &&
-                !element.disabled &&
-                style.display !== "none" &&
-                style.visibility !== "hidden";
-        });
-
-        if (focusable.length === 0) {
-            return;
-        }
-
-        const currentIndex = focusable.indexOf(document.activeElement);
-        const offset = backward ? -1 : 1;
-        const nextIndex = currentIndex === -1
-            ? 0
-            : (currentIndex + offset + focusable.length) % focusable.length;
-        focusable[nextIndex].focus();
-    }
-
-    function dispatchKey(key) {
-        const target = document.activeElement || document.body;
-        const normalizedKey = String(key || "");
-
-        if (normalizedKey === "Tab" || normalizedKey === "Shift+Tab") {
-            focusNextElement(normalizedKey === "Shift+Tab");
-            return;
-        }
-
-        const eventOptions = {
-            key: normalizedKey,
-            code: normalizedKey,
-            bubbles: true,
-            cancelable: true,
-        };
-        const shouldContinue = target.dispatchEvent(new KeyboardEvent("keydown", eventOptions));
-
-        if (shouldContinue && normalizedKey === "Enter") {
-            const form = target.closest?.("form");
-
-            if (form?.requestSubmit) {
-                form.requestSubmit();
-            } else if (target.click && ["button", "a"].includes(target.tagName?.toLowerCase())) {
-                target.click();
-            }
-        }
-
-        target.dispatchEvent(new KeyboardEvent("keyup", eventOptions));
-    }
-
-    if (actionType === "click") {
-        const element = getElement(action.element_id);
-        bringIntoView(element);
-        element.focus?.({ preventScroll: true });
-        element.click();
-        return { ok: true };
-    }
-
-    if (actionType === "move") {
-        dispatchHover(getElement(action.element_id));
-        return { ok: true };
-    }
-
-    if (actionType === "type_text") {
-        setElementValue(getElement(action.element_id), action.text);
-        return { ok: true };
-    }
-
-    if (actionType === "type_secret") {
-        setElementValue(getElement(action.element_id), secretValue);
-        return { ok: true };
-    }
-
-    if (actionType === "key") {
-        dispatchKey(action.key);
-        return { ok: true };
-    }
-
-    if (actionType === "scroll") {
-        const direction = action.direction;
-        const amount = Number(action.amount ?? 500);
-        let x = 0;
-        let y = 0;
-
-        if (direction === "down") y = amount;
-        if (direction === "up") y = -amount;
-        if (direction === "right") x = amount;
-        if (direction === "left") x = -amount;
-
-        window.scrollBy(x, y);
-        return { ok: true };
-    }
-
-    throw new Error(`Unsupported executable action: ${actionType}`);
-}
-
-async function buildBrowserContext(tab) {
-    return executeScript(tab.id, extractDomInPage);
-}
-
-async function takeScreenshotBase64(tab) {
-    return captureScreenshotBase64(tab.windowId);
-}
-
-function buildAvailableSecrets() {
-    return secrets.map((record) => ({
-        key: record.key,
-        category: record.category,
-        description: record.description || "",
-    }));
-}
-
-function buildUserInputs() {
-    return Object.entries(userInputs).map(([key, value]) => ({ key, value }));
-}
-
-async function fetchJsonWithTimeout(url, options, timeoutMs) {
-    const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
-
-    try {
-        const response = await fetch(url, {
-            ...options,
-            signal: controller.signal,
-        });
-        const text = await response.text();
-        let data = null;
-
-        if (text) {
-            try {
-                data = JSON.parse(text);
-            } catch {
-                data = text;
-            }
-        }
-
-        if (!response.ok) {
-            const detail = typeof data === "string" ? data : JSON.stringify(data, null, 2);
-            throw new Error(`Agent HTTP ${response.status}: ${detail}`);
-        }
-
-        return data;
-    } catch (error) {
-        if (error.name === "AbortError") {
-            throw new Error(`Agent request timed out after ${Math.round(timeoutMs / 1000)}s.`);
-        }
-
-        throw error;
-    } finally {
-        window.clearTimeout(timeoutId);
-    }
-}
-
-async function callAgent({ requestId, query, browser, screenshotBase64 }) {
-    const payload = {
-        request_id: requestId,
-        query,
-        browser,
-        available_secrets: buildAvailableSecrets(),
-        user_inputs: buildUserInputs(),
-        previous_messages: previousMessages,
-        screenshot_base64: screenshotBase64,
-    };
-
-    return fetchJsonWithTimeout(
-        AGENT_URL,
-        {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify(payload),
-        },
-        AGENT_REQUEST_TIMEOUT_MS
-    );
-}
-
-function getSecretValue(secretKey) {
-    const record = secrets.find((secret) => secret.key === secretKey);
-
-    if (!record) {
-        throw new Error(`Local secret not found: ${secretKey}`);
-    }
-
-    return record.value;
-}
-
-function isExecutableAction(action) {
-    return action?.type && !["request_screenshot", "request_user_input"].includes(action.type);
-}
-
-async function executeAction(tab, action) {
-    if (!isExecutableAction(action)) {
-        return;
-    }
-
-    if (action.type === "wait") {
-        await sleep(Number(action.milliseconds ?? 1000));
-        return;
-    }
-
-    const secretValue = action.type === "type_secret"
-        ? getSecretValue(action.secret_key)
-        : null;
-
-    await executeScript(tab.id, executeAgentActionInPage, [action, secretValue]);
-}
-
-async function executeActions(tab, actions) {
-    for (const action of actions) {
-        await executeAction(tab, action);
-    }
-}
-
-function formatUserInputRequest(actions) {
-    const requests = actions.filter((action) => action.type === "request_user_input");
-
-    if (requests.length === 0) {
-        return "Agent requires more user input.";
-    }
-
-    const lines = requests.map((action) => {
-        const key = action.key || action.name || action.field || "";
-        const prompt = action.prompt || action.message || action.description || "Additional input required";
-        return key ? `${key}: ${prompt}` : prompt;
-    });
-
-    return `Agent requires user input:\n${lines.join("\n")}`;
-}
-
-function agentCompletionText(response) {
-    return response.message ||
-        response.answer ||
-        response.result ||
-        response.final ||
-        "Agent finished.";
-}
-
-function trackPreviousMessage(messageText) {
-    if (messageText) {
-        previousMessages.push({
-            role: "assistant",
-            message: messageText,
-        });
-    }
-}
-
-async function runBrowserAgent(query) {
-    if (!hasBrowserAgentApis()) {
-        throw new Error("PRISM must be run from the Chrome extension popup on an active web page.");
-    }
-
-    await loadSecrets();
-
-    let tab = await getActiveTab();
-
-    if (!isScriptableTab(tab)) {
-        throw new Error(`PRISM can run on http, https, or file tabs. Current tab: ${tab.url || "unknown"}`);
-    }
-
-    const requestId = makeRequestId();
-    let screenshotBase64 = null;
-
-    appendMessage("received", `Running agent on: ${tab.title || tab.url || "active tab"}`);
-
-    for (let step = 0; step < MAX_AGENT_STEPS; step += 1) {
-        tab = await waitForTabReady(tab.id);
-
-        const browser = await buildBrowserContext(tab);
-
-        // When enabled, capture a fresh screenshot before every
-        // request to the agent server.
-        if (attachScreenshot) {
-            try {
-                screenshotBase64 = await takeScreenshotBase64(tab);
-            } catch (error) {
-                appendMessage(
-                    "received",
-                    `Screenshot capture failed: ${error.message}`
-                );
-
-                screenshotBase64 = null;
-            }
-        }
-
-        const response = await callAgent({
-            requestId,
-            query,
-            browser,
-            screenshotBase64,
-        });
-
-        const status = response?.status;
-        const actions = Array.isArray(response?.actions)
-            ? response.actions
-            : [];
-
-        screenshotBase64 = null;
-
-        if (response?.message) {
-            trackPreviousMessage(response.message);
-        }
-
-        if (status === "error") {
-            appendMessage("received", `Agent returned an error:\n${response.error || "Unknown error"}`);
-            return;
-        }
-
-        if (status === "screenshot_required") {
-            appendMessage("received", `Step ${step + 1}: agent requested a screenshot.`);
-            screenshotBase64 = await takeScreenshotBase64(tab);
-            continue;
-        }
-
-        if (status === "user_input_required") {
-            appendMessage("received", formatUserInputRequest(actions));
-            return;
-        }
-
-        if (status === "actions_ready") {
-            const executableActions = actions.filter(isExecutableAction);
-
-            if (executableActions.length === 0) {
-                appendMessage("received", "Agent returned no executable actions.");
-                return;
-            }
-
-            // appendMessage("received", `Step ${step + 1}: executing ${executableActions.length} action(s).`);
-            appendMessage("received", `${response.message}`);
-            await executeActions(tab, executableActions);
-            await sleep(AGENT_ACTION_SETTLE_MS);
-            continue;
-        }
-
-        if (["done", "complete", "completed", "success"].includes(status)) {
-            appendMessage("received", agentCompletionText(response));
-            return;
-        }
-
-        throw new Error(`Unsupported agent status: ${status || "missing"}`);
-    }
-
-    appendMessage("received", "Maximum agent steps reached.");
 }
 
 async function sendMessage() {
@@ -1074,17 +498,70 @@ async function sendMessage() {
         return;
     }
 
-    appendMessage("sent", text);
     elements.messageInput.value = "";
-    setAgentRunning(true);
+    setAgentRunning({ running: true, status: "starting" });
 
     try {
-        await runBrowserAgent(text);
+        await sendRuntimeMessage({
+            type: "prism:startAgent",
+            query: text,
+        });
     } catch (error) {
-        appendMessage("received", `Agent failed: ${error.message}`);
-    } finally {
+        await appendStoredMessage("sent", text);
+        await appendStoredMessage("received", `Agent failed: ${error.message}`);
         setAgentRunning(false);
+    } finally {
         elements.messageInput.focus();
+    }
+}
+
+async function stopAgent() {
+    if (!agentRunning) {
+        return;
+    }
+
+    setAgentRunning({ running: true, status: "stopping" });
+
+    try {
+        await sendRuntimeMessage({
+            type: "prism:stopAgent",
+        });
+    } catch (error) {
+        await appendStoredMessage("received", `Unable to stop agent: ${error.message}`);
+        setAgentRunning(false);
+    }
+}
+
+async function clearChats() {
+    if (agentRunning && !window.confirm("Stop the running agent and clear chat history?")) {
+        return;
+    }
+
+    if (!agentRunning && chatMessages.length > 0 && !window.confirm("Clear chat history?")) {
+        return;
+    }
+
+    try {
+        await sendRuntimeMessage({
+            type: "prism:clearChat",
+            stopRun: true,
+        });
+    } catch (error) {
+        if (isMissingMessageReceiver(error)) {
+            await storageSet(CHAT_STORAGE_KEY, []);
+            await storageSet(AGENT_STATE_STORAGE_KEY, {
+                running: false,
+                status: "idle",
+                requestId: "",
+                tabId: null,
+                updatedAt: Date.now(),
+            });
+            renderChat([]);
+            setAgentRunning(false);
+            return;
+        }
+
+        await appendStoredMessage("received", `Unable to clear chat history: ${error.message}`);
     }
 }
 
@@ -1351,6 +828,8 @@ function bindEvents() {
     elements.agentTab.addEventListener("click", () => setActiveView("agent"));
     elements.privateTab.addEventListener("click", () => setActiveView("private"));
     elements.send.addEventListener("click", sendMessage);
+    elements.stopAgent.addEventListener("click", stopAgent);
+    elements.clearChats.addEventListener("click", clearChats);
     elements.messageInput.addEventListener("keydown", (event) => {
         if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();
@@ -1383,7 +862,7 @@ function bindEvents() {
             elements.attachScreenshot.checked = attachScreenshot;
             updateScreenshotStatus();
 
-            appendMessage(
+            await appendStoredMessage(
                 "received",
                 `Unable to save screenshot setting: ${error.message}`
             );
@@ -1419,11 +898,55 @@ function updateScreenshotStatus() {
         : "On request only";
 }
 
+async function loadAgentSnapshot() {
+    if (hasRuntimeMessaging()) {
+        try {
+            const snapshot = await sendRuntimeMessage({
+                type: "prism:getSnapshot",
+            });
+
+            renderChat(snapshot?.chat || []);
+            setAgentRunning(snapshot?.state || false);
+            return;
+        } catch (error) {
+            if (!isMissingMessageReceiver(error)) {
+                throw error;
+            }
+        }
+    }
+
+    const stored = await storageGetAll();
+    renderChat(stored[CHAT_STORAGE_KEY] || []);
+    setAgentRunning(false);
+}
+
+function bindStorageChanges() {
+    if (!hasChromeStorage() || !chrome.storage?.onChanged) {
+        return;
+    }
+
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+        if (areaName !== "local") {
+            return;
+        }
+
+        if (changes[CHAT_STORAGE_KEY]) {
+            renderChat(changes[CHAT_STORAGE_KEY].newValue || []);
+        }
+
+        if (changes[AGENT_STATE_STORAGE_KEY]) {
+            setAgentRunning(changes[AGENT_STATE_STORAGE_KEY].newValue || false);
+        }
+    });
+}
+
 async function init() {
     populateCategorySelect();
     bindEvents();
+    bindStorageChanges();
 
     try {
+        await loadAgentSnapshot();
         await loadScreenshotSetting();
         await loadSecrets();
         renderSecrets();
@@ -1431,11 +954,6 @@ async function init() {
         elements.secretList.textContent =
             `Unable to initialize PRISM: ${error.message}`;
     }
-
-    appendMessage(
-        "received",
-        "Enter a prompt to run PRISM on the active tab."
-    );
 }
 
 init();

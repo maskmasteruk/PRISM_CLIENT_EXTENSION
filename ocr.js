@@ -9,6 +9,12 @@ export async function extractTextFromImage(imageSrc, options = {}) {
             imageSrc,
             language,
             {
+                workerPath: extensionUrl("libs/tesseract/worker.min.js"),
+                corePath: extensionUrl("libs/tesseract/core/"),
+                langPath: extensionUrl("libs/tesseract/lang/"),
+                cacheMethod: "none",
+                workerBlobURL: false,
+                gzip: true,
                 logger: (message) => {
                     onProgress(message);
                 }
@@ -28,4 +34,12 @@ export async function extractTextFromImage(imageSrc, options = {}) {
             error: error.message
         };
     }
+}
+
+function extensionUrl(path) {
+    if (typeof chrome !== "undefined" && chrome.runtime?.getURL) {
+        return chrome.runtime.getURL(path);
+    }
+
+    return path;
 }

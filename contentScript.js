@@ -1,5 +1,6 @@
 (function prismContentScript() {
   const ELEMENT_ATTR = "data-prism-element-id";
+  const AGENT_STATE_STORAGE_KEY = "prism.agentState";
   const SELECTOR = [
     "input",
     "textarea",
@@ -11,6 +12,16 @@
     "summary",
     "label"
   ].join(",");
+  const USER_ACTION_EVENTS = [
+    "pointerdown",
+    "mousedown",
+    "keydown",
+    "input",
+    "change",
+    "wheel",
+    "touchstart"
+  ];
+  let prismAgentActive = false;
 
   function rectFor(element) {
     const rect = element.getBoundingClientRect();
@@ -213,6 +224,88 @@
     if (action.action === "scroll") window.scrollBy(action.x || 0, action.y || 0);
     return { result: "success", action: action.action };
   }
+
+  function installUserActionStopper() {
+    if (window.__PRISM_CONTENT_USER_ACTION_STOPPER__) {
+      return;
+    }
+
+    let lastSentAt = 0;
+
+    const sendStop = (event) => {
+      if (!prismAgentActive) {
+        return;
+      }
+
+      if (!event.isTrusted) {
+        return;
+      }
+
+      const now = Date.now();
+
+      if (now - lastSentAt < 500) {
+        return;
+      }
+
+      lastSentAt = now;
+
+      try {
+        chrome.runtime.sendMessage(
+          {
+            type: "prism:pageUserAction",
+            eventType: event.type,
+            url: window.location.href
+          },
+          () => {
+            void chrome.runtime.lastError;
+          }
+        );
+      } catch {
+        // The extension context can disappear while a page is navigating.
+      }
+    };
+
+    USER_ACTION_EVENTS.forEach((eventType) => {
+      window.addEventListener(eventType, sendStop, {
+        capture: true,
+        passive: true
+      });
+    });
+
+    window.__PRISM_CONTENT_USER_ACTION_STOPPER__ = true;
+  }
+
+  function syncAgentActiveState() {
+    if (!chrome.storage?.local) {
+      return;
+    }
+
+    chrome.storage.local.get(AGENT_STATE_STORAGE_KEY, (items) => {
+      if (chrome.runtime.lastError) {
+        return;
+      }
+
+      prismAgentActive = Boolean(items?.[AGENT_STATE_STORAGE_KEY]?.running);
+    });
+  }
+
+  function bindAgentStateChanges() {
+    if (!chrome.storage?.onChanged) {
+      return;
+    }
+
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName !== "local" || !changes[AGENT_STATE_STORAGE_KEY]) {
+        return;
+      }
+
+      prismAgentActive = Boolean(changes[AGENT_STATE_STORAGE_KEY].newValue?.running);
+    });
+  }
+
+  syncAgentActiveState();
+  bindAgentStateChanges();
+  installUserActionStopper();
 
   window.PRISM_CONTENT_V1 = {
     perceiveDom,

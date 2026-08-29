@@ -3,9 +3,24 @@ import {
     env
 } from "@huggingface/transformers";
 
+function extensionUrl(path) {
+    if (typeof chrome !== "undefined" && chrome.runtime?.getURL) {
+        return chrome.runtime.getURL(path);
+    }
+
+    return path;
+}
+
 // Use locally stored models only
 env.allowLocalModels = true;
 env.allowRemoteModels = false;
+env.useBrowserCache = false;
+
+if (env.backends?.onnx?.wasm) {
+    env.backends.onnx.wasm.wasmPaths = extensionUrl("libs/ort/");
+    env.backends.onnx.wasm.numThreads = 1;
+    env.backends.onnx.wasm.proxy = false;
+}
 
 // Local model directory
 env.localModelPath = new URL(
@@ -28,30 +43,41 @@ export async function loadPIIModel(
 ) {
     const {
         device = "wasm",
-        onProgress = () => {}
+        dtype = "q8",
+        onProgress = null
     } = options;
 
-    onProgress({
-        status: "loading",
-        message: "Loading PII model..."
-    });
+    if (typeof onProgress === "function") {
+        onProgress({
+            status: "loading",
+            message: "Loading PII model..."
+        });
+    }
+
+    const pipelineOptions = {
+        device,
+        dtype,
+    };
+
+    if (typeof onProgress === "function") {
+        pipelineOptions.progress_callback = (progress) => {
+            onProgress(progress);
+        };
+    }
 
     try {
         detector = await pipeline(
             "token-classification",
             modelId,
-            {
-                device,
-                progress_callback: (progress) => {
-                    onProgress(progress);
-                }
-            }
+            pipelineOptions
         );
 
-        onProgress({
-            status: "ready",
-            message: "PII model loaded successfully."
-        });
+        if (typeof onProgress === "function") {
+            onProgress({
+                status: "ready",
+                message: "PII model loaded successfully."
+            });
+        }
 
         return {
             success: true

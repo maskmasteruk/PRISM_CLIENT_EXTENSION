@@ -8,6 +8,8 @@ export default defineConfig({
 
         rollupOptions: {
             input: {
+                background: "background.js",
+                offscreen: "offscreen.html",
                 popup: "popup.html"
             },
 
@@ -35,8 +37,18 @@ export default defineConfig({
                     dest: "."
                 },
                 {
-                    src: "models",
-                    dest: "."
+                    src: "models/bert-small-pii-web/**/*",
+                    dest: "models",
+                    rename: {
+                        stripBase: 1
+                    }
+                },
+                {
+                    src: "models/blazeface/**/*",
+                    dest: "models",
+                    rename: {
+                        stripBase: 1
+                    }
                 },
                 {
                     src: "contentScript.js",
@@ -63,7 +75,7 @@ export default defineConfig({
                     dest: "."
                 },
                 {
-                    src: "yolo.js",
+                    src: "face.js",
                     dest: "."
                 }
             ]

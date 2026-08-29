@@ -5,8 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PRISM</title>
     <link rel="stylesheet" href="styles.css">
-    <script src="libs/tesseract.min.js"></script>
-    <script src="libs/ort.min.js"></script>
 </head>
 <body>
 <div class="app">
@@ -25,6 +23,13 @@
     </header>
 
     <main class="view active" id="agentView">
+        <section class="chat-toolbar" aria-label="Agent controls">
+            <span class="agent-status" id="agentStatus">Idle</span>
+            <div class="chat-toolbar-actions">
+                <button class="secondary" id="stopAgent" type="button" disabled>Stop</button>
+                <button class="secondary" id="clearChats" type="button">Clear Chats</button>
+            </div>
+        </section>
         <div class="chat" id="chat" aria-live="polite"></div>
         <div class="input-area">
             <div class="input-box">

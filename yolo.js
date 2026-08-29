@@ -1,5 +1,25 @@
 let session = null;
 
+function extensionUrl(path) {
+    if (typeof chrome !== "undefined" && chrome.runtime?.getURL) {
+        return chrome.runtime.getURL(path);
+    }
+
+    return path;
+}
+
+function getOrtRuntime() {
+    if (!globalThis.ort) {
+        throw new Error("ONNX Runtime is not loaded.");
+    }
+
+    globalThis.ort.env.wasm.wasmPaths = extensionUrl("libs/ort/");
+    globalThis.ort.env.wasm.numThreads = 1;
+    globalThis.ort.env.wasm.proxy = false;
+
+    return globalThis.ort;
+}
+
 // COCO dataset classes
 const labels = [
     "person", "bicycle", "car", "motorcycle", "airplane", "bus",
@@ -25,9 +45,13 @@ const labels = [
  * @param {string} modelPath
  */
 export async function loadYOLOModel(
-    modelPath = "./models/yolov8n.onnx"
+    modelPath = extensionUrl("models/yolov8n.onnx")
 ) {
-    session = await ort.InferenceSession.create(modelPath);
+    const runtime = getOrtRuntime();
+
+    session = await runtime.InferenceSession.create(modelPath, {
+        executionProviders: ["wasm"],
+    });
 
     return true;
 }
@@ -68,7 +92,9 @@ function preprocess(image, size = 640) {
         ...blue
     ]);
 
-    return new ort.Tensor(
+    const runtime = getOrtRuntime();
+
+    return new runtime.Tensor(
         "float32",
         input,
         [1, 3, size, size]

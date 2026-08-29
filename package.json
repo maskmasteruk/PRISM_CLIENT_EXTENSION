@@ -9,6 +9,13 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^3.8.0",
+    "@tensorflow-models/blazeface": "^0.1.0",
+    "@tensorflow/tfjs-backend-cpu": "^4.22.0",
+    "@tensorflow/tfjs-backend-webgl": "^4.22.0",
+    "@tensorflow/tfjs-converter": "^4.22.0",
+    "@tensorflow/tfjs-core": "^4.22.0",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "tesseract.js": "^5.1.1",
     "vite": "^8.2.2"
   },
   "devDependencies": {

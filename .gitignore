@@ -1,3 +1,5 @@
 **/models/**
 **/node_modules/**
 **/dist/**
+*.crx
+*.pem

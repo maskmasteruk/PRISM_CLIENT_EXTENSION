@@ -69,6 +69,30 @@ button:hover {
     border-color: var(--border-strong);
 }
 
+button:disabled {
+    cursor: not-allowed;
+    opacity: 0.58;
+}
+
+button:disabled:hover {
+    background: var(--panel);
+    border-color: var(--border);
+}
+
+.primary:disabled:hover {
+    border-color: var(--accent);
+    background: var(--accent);
+}
+
+.secondary:disabled:hover {
+    background: var(--panel-soft);
+}
+
+.danger:disabled:hover {
+    border-color: #efc6cb;
+    background: var(--danger-soft);
+}
+
 button:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
@@ -209,6 +233,49 @@ select:focus-visible {
     flex-direction: column;
 }
 
+.chat-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 14px 0;
+}
+
+.chat-toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.chat-toolbar button {
+    min-height: 32px;
+    padding: 0 10px;
+    font-size: 12px;
+}
+
+.agent-status {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    max-width: 170px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--panel);
+    color: var(--muted);
+    padding: 0 9px;
+    font-size: 11px;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.agent-status.running {
+    border-color: #c9d9d3;
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+
 .section-intro {
     margin: 0 14px 12px;
     padding: 14px;
@@ -279,6 +346,25 @@ select:focus-visible {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     box-shadow: 0 1px 2px rgba(36, 39, 45, 0.03);
+}
+
+.message.has-image {
+    width: min(94%, 360px);
+    padding: 8px;
+}
+
+.message-text + .message-image {
+    margin-top: 8px;
+}
+
+.message-image {
+    display: block;
+    width: 100%;
+    max-height: 260px;
+    object-fit: contain;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #111418;
 }
 
 .received {
