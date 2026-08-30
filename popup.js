@@ -488,6 +488,7 @@ function setAgentRunning(stateOrRunning) {
 }
 
 async function sendMessage() {
+    let startTime = performance.now();
     if (agentRunning) {
         return;
     }
@@ -512,6 +513,8 @@ async function sendMessage() {
         setAgentRunning(false);
     } finally {
         elements.messageInput.focus();
+        let endTime = performance.now();
+        console.log("Response Time from start to end of receiving time: " + ((endTime - startTime)/1000) + " s")
     }
 }
 
