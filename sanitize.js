@@ -3,6 +3,7 @@ import { detectPII, loadPIIModel } from "./pii.js";
 
 let faceModelPromise = null;
 let piiModelPromise = null;
+const PII_BADGE_LABEL = "PII";
 
 function extensionUrl(path) {
     if (typeof chrome !== "undefined" && chrome.runtime?.getURL) {
@@ -118,7 +119,7 @@ export async function sanitizeScreenshot(screenshotSource) {
                                 continue;
                             }
 
-                            const tag = formatPiiTag(entity.label);
+                            const tag = PII_BADGE_LABEL;
                             const regionKey = `${Math.round(box.x)}:${Math.round(box.y)}:${Math.round(box.width)}:${Math.round(box.height)}:${tag}`;
 
                             applyPiiBlur(ctx, box);
@@ -238,11 +239,11 @@ function getWordBox(word) {
 }
 
 function formatPiiTag(label) {
-    const tag = String(label || "PII")
+    const tag = String(label || PII_BADGE_LABEL)
         .replace(/^[BI]-/i, "")
         .trim();
 
-    return (tag || "PII").toUpperCase();
+    return (tag || PII_BADGE_LABEL).toUpperCase();
 }
 
 function drawPiiTag(ctx, label, x, y, width, height) {
@@ -253,40 +254,49 @@ function drawPiiTag(ctx, label, x, y, width, height) {
         return;
     }
 
-    const fontSize = Math.round(clamp(height * 0.55, 11, 18));
-    const paddingX = 6;
-    const tagHeight = fontSize + 7;
-    const gap = 2;
-    const margin = 2;
-
     ctx.save();
+
+    const fontSize = Math.round(clamp(box.height * 0.55, 11, 18));
     ctx.font = `700 ${fontSize}px Arial, sans-serif`;
     ctx.textBaseline = "middle";
     ctx.textAlign = "center";
 
+    const paddingX = 6;
+    const paddingY = 3;
+    const gap = 2;
+    const margin = 2;
     const canvasWidth = ctx.canvas.width;
     const canvasHeight = ctx.canvas.height;
     const measuredTextWidth = ctx.measureText(tag).width;
+    const maxTagWidth = Math.max(0, canvasWidth - margin * 2);
     const tagWidth = Math.min(
         Math.max(box.width, measuredTextWidth + paddingX * 2),
-        canvasWidth - margin * 2
+        maxTagWidth
     );
-    const left = clamp(box.x, margin, canvasWidth - tagWidth - margin);
-    const hasRoomAbove = box.y - tagHeight - gap >= margin;
-    const top = hasRoomAbove
-        ? box.y - tagHeight - gap
-        : clamp(box.y, margin, canvasHeight - tagHeight - margin);
+    const tagHeight = fontSize + paddingY * 2;
+    const tagX = clamp(
+        box.x + (box.width - tagWidth) / 2,
+        margin,
+        Math.max(margin, canvasWidth - tagWidth - margin)
+    );
+    const aboveY = box.y - tagHeight - gap;
+    const belowY = box.y + box.height + gap;
+    const tagY = aboveY >= margin
+        ? aboveY
+        : belowY + tagHeight <= canvasHeight - margin
+            ? belowY
+            : clamp(box.y, margin, Math.max(margin, canvasHeight - tagHeight - margin));
     const fittedText = fitCanvasText(ctx, tag, tagWidth - paddingX * 2);
 
-    ctx.fillStyle = "#1d4ed8";
-    ctx.fillRect(left, top, tagWidth, tagHeight);
-
-    ctx.strokeStyle = "rgba(29, 78, 216, 0.85)";
-    ctx.lineWidth = 1;
-    ctx.strokeRect(box.x, box.y, box.width, box.height);
+    ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+    const radius = Math.min(4, tagHeight / 2);
+    ctx.beginPath();
+    ctx.roundRect(tagX, tagY, tagWidth, tagHeight, radius);
+    ctx.fill();
 
     ctx.fillStyle = "#ffffff";
-    ctx.fillText(fittedText, left + tagWidth / 2, top + tagHeight / 2);
+    ctx.fillText(fittedText, tagX + tagWidth / 2, tagY + tagHeight / 2);
+
     ctx.restore();
 }
 
