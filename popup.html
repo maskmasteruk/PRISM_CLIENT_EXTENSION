@@ -9,69 +9,103 @@
 <body>
 <div class="app">
     <header class="topbar">
-        <div class="brand">
-            <div class="logo" aria-hidden="true"><img src="icons/icon16.png" alt="Logo"></div>
-            <div>
-                <div class="title">PRISM</div>
-                <div class="subtitle">Privacy-preserving agent</div>
+        <div class="brand-row">
+            <div class="brand">
+                <div class="logo" aria-hidden="true">
+                    <img src="icons/icon32.png" alt="">
+                </div>
+                <div class="brand-copy">
+                    <div class="title">PRISM</div>
+                    <div class="subtitle">Privacy-preserving screen agent</div>
+                </div>
             </div>
+            <span class="trust-pill">Local-first</span>
         </div>
+
         <div class="tabs" role="tablist" aria-label="Popup sections">
-            <button class="tab active" id="agentTab" type="button">Agent</button>
-            <button class="tab" id="privateTab" type="button">Sensitive</button>
+            <button
+                    class="tab active"
+                    id="agentTab"
+                    type="button"
+                    role="tab"
+                    aria-selected="true"
+                    aria-controls="agentView"
+            >
+                Agent
+            </button>
+            <button
+                    class="tab"
+                    id="privateTab"
+                    type="button"
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="privateView"
+            >
+                Vault
+            </button>
         </div>
     </header>
 
-    <main class="view active" id="agentView">
+    <main class="view active" id="agentView" role="tabpanel" aria-labelledby="agentTab">
         <section class="chat-toolbar" aria-label="Agent controls">
-            <span class="agent-status" id="agentStatus">Idle</span>
-            <div class="chat-toolbar-actions">
-                <button class="secondary" id="stopAgent" type="button" disabled>Stop</button>
-                <button class="secondary" id="clearChats" type="button">Clear Chats</button>
-            </div>
+            <strong class="agent-status" id="agentStatus">Idle</strong>
+            <button class="secondary quiet" id="stopAgent" type="button" disabled>Stop</button>
+            <button class="secondary quiet" id="clearChats" type="button">Clear Chats</button>
         </section>
-        <div class="chat" id="chat" aria-live="polite"></div>
-        <div class="input-area">
+
+        <section class="chat-shell" aria-label="Conversation">
+            <div class="chat" id="chat" aria-live="polite"></div>
+        </section>
+
+        <section class="input-area" aria-label="Message composer">
             <div class="input-box">
-                <textarea id="messageInput" placeholder="Ask PRISM" autocomplete="off"></textarea>
-                <button class="primary" id="send" type="button" title="Send">Send</button>
+                <label class="sr-only" for="messageInput">Ask PRISM</label>
+                <textarea id="messageInput" rows="1" placeholder="Ask PRISM" autocomplete="off"></textarea>
+                <button class="primary send-button" id="send" type="button" title="Send message">Send</button>
             </div>
 
             <div class="screenshot-option">
                 <label class="screenshot-toggle">
                     <input type="checkbox" id="attachScreenshot">
-                    <span class="toggle-slider"></span>
+                    <span class="toggle-slider" aria-hidden="true"></span>
                     <span class="toggle-label">Attach screenshot</span>
                 </label>
-
-                <span
-                        class="screenshot-status"
-                        id="screenshotStatus"
-                        title="When disabled, screenshots are captured only when the agent requests one."
-                >
-            On request only
-        </span>
             </div>
-        </div>
+        </section>
     </main>
 
-    <main class="view" id="privateView">
-        <section class="section-intro">
-            <h1>Sensitive information</h1>
-            <p>Secret values are stored locally and are never sent to the server. The agent can only send keys or opaque references.</p>
+    <main class="view" id="privateView" role="tabpanel" aria-labelledby="privateTab" hidden>
+        <section class="vault-header">
+            <div>
+                <h1>Local vault</h1>
+                <p>Secrets are stored in browser storage and referenced by key.</p>
+            </div>
+            <span class="vault-count" id="secretCount">0 saved</span>
         </section>
 
-        <section class="toolbar">
-            <input id="secretSearch" type="search" placeholder="Search keys">
-            <button class="primary" id="addSecret" type="button">Add Secret</button>
-            <button class="secondary" id="exportSecrets" type="button">Export</button>
-            <button class="secondary" id="importSecrets" type="button">Import</button>
+        <section class="toolbar" aria-label="Secret controls">
+            <label class="search-shell" for="secretSearch">
+                <span class="search-icon" aria-hidden="true"></span>
+                <input id="secretSearch" type="search" placeholder="Search keys">
+            </label>
+            <div class="toolbar-actions">
+                <button class="primary" id="addSecret" type="button">Add Secret</button>
+                <button class="secondary" id="exportSecrets" type="button">Export</button>
+                <button class="secondary" id="importSecrets" type="button">Import</button>
+            </div>
             <input class="hidden" id="importSecretsFile" type="file" accept="application/json,.json">
         </section>
 
         <section class="secret-list" id="secretList" aria-live="polite"></section>
 
         <form class="secret-form hidden" id="secretForm">
+            <div class="form-header">
+                <div>
+                    <h2>Secret details</h2>
+                    <p>Values are hidden in the list view.</p>
+                </div>
+            </div>
+
             <input type="hidden" id="secretId">
             <label>
                 Key
@@ -101,7 +135,6 @@
 
         <button class="danger clear-button" id="clearSecrets" type="button">Clear All Secrets</button>
     </main>
-
 </div>
 
 <script type="module" src="popup.js"></script>

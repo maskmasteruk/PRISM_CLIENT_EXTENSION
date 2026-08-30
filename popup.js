@@ -42,13 +42,13 @@ const elements = {
     stopAgent: $("stopAgent"),
     clearChats: $("clearChats"),
     attachScreenshot: $("attachScreenshot"),
-    screenshotStatus: $("screenshotStatus"),
     secretSearch: $("secretSearch"),
     addSecret: $("addSecret"),
     exportSecrets: $("exportSecrets"),
     importSecrets: $("importSecrets"),
     importSecretsFile: $("importSecretsFile"),
     secretList: $("secretList"),
+    secretCount: $("secretCount"),
     secretForm: $("secretForm"),
     secretId: $("secretId"),
     secretKey: $("secretKey"),
@@ -354,8 +354,12 @@ function setActiveView(viewName) {
 
     elements.agentTab.classList.toggle("active", !showSensitive);
     elements.privateTab.classList.toggle("active", showSensitive);
+    elements.agentTab.setAttribute("aria-selected", String(!showSensitive));
+    elements.privateTab.setAttribute("aria-selected", String(showSensitive));
     elements.agentView.classList.toggle("active", !showSensitive);
     elements.privateView.classList.toggle("active", showSensitive);
+    elements.agentView.toggleAttribute("hidden", showSensitive);
+    elements.privateView.toggleAttribute("hidden", !showSensitive);
 }
 
 function normalizeChatMessages(value) {
@@ -388,6 +392,51 @@ function normalizeImageDataUrl(value) {
     const dataUrl = stringifyValue(value);
 
     return dataUrl.startsWith("data:image/") ? dataUrl : "";
+}
+
+function formatCount(value, singular, plural = `${singular}s`) {
+    return `${value} ${value === 1 ? singular : plural}`;
+}
+
+function updateSecretCount(filteredCount = secrets.length, hasSearch = false) {
+    if (!elements.secretCount) {
+        return;
+    }
+
+    elements.secretCount.textContent = hasSearch
+        ? `${filteredCount}/${secrets.length} shown`
+        : `${formatCount(secrets.length, "secret")} saved`;
+}
+
+function maskSecretValue(value) {
+    const text = stringifyValue(value);
+
+    if (!text) {
+        return "(empty value)";
+    }
+
+    return `${formatCount(text.length, "character")} hidden`;
+}
+
+function flashButtonLabel(button, temporaryText, delay = 1200) {
+    const previousText = button.textContent;
+
+    button.textContent = temporaryText;
+    button.disabled = true;
+
+    window.setTimeout(() => {
+        button.textContent = previousText;
+        button.disabled = false;
+    }, delay);
+}
+
+function resizeMessageInput() {
+    if (!elements.messageInput) {
+        return;
+    }
+
+    elements.messageInput.style.height = "auto";
+    elements.messageInput.style.height = `${Math.min(elements.messageInput.scrollHeight, 104)}px`;
 }
 
 function createMessageElement(chatMessage) {
@@ -470,6 +519,7 @@ function setAgentRunning(stateOrRunning) {
     const status = state.status || (running ? "running" : "idle");
 
     agentRunning = running;
+    document.body.dataset.agentState = running ? status : "idle";
     elements.send.disabled = running;
     elements.messageInput.disabled = running;
     elements.send.textContent = running ? "Running" : "Send";
@@ -611,6 +661,7 @@ async function sendMessage() {
     }
 
     elements.messageInput.value = "";
+    resizeMessageInput();
     setAgentRunning({ running: true, status: "starting" });
 
     try {
@@ -624,6 +675,7 @@ async function sendMessage() {
         setAgentRunning(false);
     } finally {
         elements.messageInput.focus();
+        resizeMessageInput();
 
     }
 }
@@ -715,6 +767,7 @@ function renderSecrets() {
     const search = elements.secretSearch.value.trim();
     const filteredSecrets = secrets.filter((record) => recordMatchesSearch(record, search));
 
+    updateSecretCount(filteredSecrets.length, Boolean(search));
     elements.secretList.replaceChildren();
 
     if (filteredSecrets.length === 0) {
@@ -732,6 +785,7 @@ function renderSecrets() {
         row.className = "secret-row";
 
         const content = document.createElement("div");
+        content.className = "secret-content";
 
         const key = document.createElement("div");
         key.className = "secret-key";
@@ -739,7 +793,7 @@ function renderSecrets() {
 
         const value = document.createElement("div");
         value.className = "secret-value";
-        value.textContent = record.value || "(empty value)";
+        value.textContent = maskSecretValue(record.value);
 
         const description = document.createElement("div");
         description.className = "secret-description";
@@ -752,12 +806,16 @@ function renderSecrets() {
         content.append(key, value, description, meta);
 
         const actions = document.createElement("div");
+        actions.className = "secret-actions";
 
         const copyButton = document.createElement("button");
         copyButton.className = "secondary";
         copyButton.type = "button";
         copyButton.textContent = "Copy";
-        copyButton.addEventListener("click", () => copyValue(record.value));
+        copyButton.addEventListener("click", async () => {
+            await copyValue(record.value);
+            flashButtonLabel(copyButton, "Copied");
+        });
 
         const editButton = document.createElement("button");
         editButton.className = "secondary";
@@ -817,6 +875,7 @@ function showSecretForm(record = null) {
     }
 
     elements.secretForm.classList.remove("hidden");
+    elements.secretForm.scrollIntoView({ block: "nearest" });
     elements.secretKey.focus();
 }
 
@@ -943,6 +1002,7 @@ function bindEvents() {
     elements.send.addEventListener("click", sendMessage);
     elements.stopAgent.addEventListener("click", stopAgent);
     elements.clearChats.addEventListener("click", clearChats);
+    elements.messageInput.addEventListener("input", resizeMessageInput);
     elements.messageInput.addEventListener("keydown", (event) => {
         if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();
@@ -973,7 +1033,6 @@ function bindEvents() {
             // Revert the checkbox if local storage fails.
             attachScreenshot = !attachScreenshot;
             elements.attachScreenshot.checked = attachScreenshot;
-            updateScreenshotStatus();
 
             await appendStoredMessage(
                 "received",
@@ -992,23 +1051,10 @@ async function loadScreenshotSetting() {
     if (elements.attachScreenshot) {
         elements.attachScreenshot.checked = attachScreenshot;
     }
-
-    updateScreenshotStatus();
 }
 
 async function saveScreenshotSetting() {
     await storageSet(SCREENSHOT_SETTING_KEY, attachScreenshot);
-    updateScreenshotStatus();
-}
-
-function updateScreenshotStatus() {
-    if (!elements.screenshotStatus) {
-        return;
-    }
-
-    elements.screenshotStatus.textContent = attachScreenshot
-        ? "Attached every request"
-        : "On request only";
 }
 
 async function loadAgentSnapshot() {
@@ -1063,6 +1109,7 @@ async function init() {
     bindEvents();
     bindStorageChanges();
     bindRuntimeDebugMessages();
+    resizeMessageInput();
 
     try {
         await loadAgentSnapshot();
