@@ -72,11 +72,41 @@ async function ensureSanitizerGlobals() {
     return sanitizerGlobalsPromise;
 }
 
-async function sanitizeScreenshotDataUrl(dataUrl) {
+function sendSanitizerRegionTiming(timing) {
+    try {
+        chrome.runtime.sendMessage({
+            type: "prism:screenshotSanitizerRegionTiming",
+            timing,
+        }, () => {
+            void chrome.runtime.lastError;
+        });
+    } catch {
+        // The popup may be closed; sanitize.js still logs in the offscreen console.
+    }
+}
+
+function sendSanitizerDebugLog(debugLog) {
+    try {
+        chrome.runtime.sendMessage({
+            type: "prism:screenshotSanitizerDebugLog",
+            debugLog,
+        }, () => {
+            void chrome.runtime.lastError;
+        });
+    } catch {
+        // The popup may be closed; sanitize.js still logs in the offscreen console.
+    }
+}
+
+async function sanitizeScreenshotDataUrl(dataUrl, options = {}) {
     await ensureSanitizerGlobals();
     sanitizerModulePromise ||= import("./sanitize.js");
     const { sanitizeScreenshot } = await sanitizerModulePromise;
-    const canvas = await sanitizeScreenshot(dataUrl);
+    const canvas = await sanitizeScreenshot(dataUrl, {
+        ...options,
+        onRegionProcessed: sendSanitizerRegionTiming,
+        onDebugLog: sendSanitizerDebugLog,
+    });
 
     return stripBase64FromDataUrl(canvas.toDataURL("image/png"));
 }
@@ -92,7 +122,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return false;
     }
 
-    sanitizeScreenshotDataUrl(message.dataUrl)
+    sanitizeScreenshotDataUrl(message.dataUrl, {
+        mediaRegions: Array.isArray(message.mediaRegions) ? message.mediaRegions : [],
+        viewport: message.viewport || null,
+    })
         .then((base64) => {
             sendResponse({
                 ok: true,
@@ -100,11 +133,39 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             });
         })
         .catch((error) => {
+            const normalizedError = normalizeError(error, "Screenshot sanitization failed without an error message.");
+
             sendResponse({
                 ok: false,
-                error: error.message,
+                error: normalizedError.message,
             });
         });
 
     return true;
 });
+
+function normalizeError(error, fallbackMessage) {
+    if (error instanceof Error && error.message) {
+        return error;
+    }
+
+    if (typeof error === "string" && error.trim()) {
+        return new Error(error);
+    }
+
+    if (error && typeof error.message === "string" && error.message.trim()) {
+        return new Error(error.message);
+    }
+
+    try {
+        const serialized = JSON.stringify(error);
+
+        if (serialized && serialized !== "null" && serialized !== "undefined") {
+            return new Error(serialized);
+        }
+    } catch {
+        // Ignore serialization failures and use the fallback below.
+    }
+
+    return new Error(fallbackMessage);
+}

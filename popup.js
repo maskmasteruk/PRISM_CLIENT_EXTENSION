@@ -18,11 +18,13 @@ const LEGACY_COLLECTION_KEYS = new Set([
 const SCREENSHOT_SETTING_KEY = "prism.attachScreenshot";
 const CHAT_STORAGE_KEY = "prism.chatMessages";
 const AGENT_STATE_STORAGE_KEY = "prism.agentState";
+const SANITIZER_DEBUG_STORAGE_KEY = "prism.screenshotSanitizerDebugLog";
 const APP_STORAGE_KEYS = new Set([
     ...LEGACY_COLLECTION_KEYS,
     SCREENSHOT_SETTING_KEY,
     CHAT_STORAGE_KEY,
     AGENT_STATE_STORAGE_KEY,
+    SANITIZER_DEBUG_STORAGE_KEY,
 ]);
 const MISSING_RECEIVER_MESSAGE = "Receiving end does not exist";
 
@@ -64,6 +66,7 @@ let editingKey = "";
 let agentRunning = false;
 let chatMessages = [];
 let attachScreenshot = false;
+let lastSanitizerDebugLogKey = "";
 
 function hasChromeStorage() {
     return typeof chrome !== "undefined" && Boolean(chrome.storage?.local);
@@ -487,8 +490,116 @@ function setAgentRunning(stateOrRunning) {
     }
 }
 
+function formatSanitizerTargetsForConsole(targets) {
+    const regions = Array.isArray(targets?.regions) ? targets.regions : [];
+
+    return {
+        viewport: targets?.viewport || null,
+        count: regions.length,
+        elements: regions.map((region, index) => ({
+            index,
+            tag: region.tag || region.element?.tag || "",
+            id: region.element?.id || "",
+            classes: region.element?.classes || [],
+            source: region.element?.source || "",
+            bbox: {
+                x: region.x,
+                y: region.y,
+                width: region.width,
+                height: region.height,
+            },
+        })),
+    };
+}
+
+function formatSanitizerTimingForConsole(timing) {
+    return {
+        index: timing?.index,
+        tag: timing?.tag || "",
+        id: timing?.id || "",
+        classes: Array.isArray(timing?.classes) ? timing.classes : [],
+        source: timing?.source || "",
+        cssBox: timing?.cssBox || null,
+        screenshotBox: timing?.screenshotBox || null,
+    };
+}
+
+function sanitizerDebugConsoleLabel(kind) {
+    if (kind === "ocr") {
+        return "PRISM OCR output:";
+    }
+
+    if (kind === "pii") {
+        return "PRISM PII detect output:";
+    }
+
+    if (kind === "error") {
+        return "PRISM OCR / PII error output:";
+    }
+
+    return "PRISM screenshot sanitizer debug output:";
+}
+
+function sanitizerDebugLogKey(debugLog) {
+    try {
+        return JSON.stringify({
+            kind: debugLog?.kind || "",
+            payload: debugLog?.payload ?? null,
+        });
+    } catch {
+        return `${debugLog?.kind || ""}:${String(debugLog?.payload ?? "")}`;
+    }
+}
+
+function logSanitizerDebugOutput(debugLog) {
+    if (!debugLog || typeof debugLog !== "object") {
+        return;
+    }
+
+    const key = sanitizerDebugLogKey(debugLog);
+
+    if (key === lastSanitizerDebugLogKey) {
+        return;
+    }
+
+    lastSanitizerDebugLogKey = key;
+    console.log(
+        sanitizerDebugConsoleLabel(debugLog.kind),
+        debugLog.payload ?? null
+    );
+}
+
+function bindRuntimeDebugMessages() {
+    if (!hasRuntimeMessaging() || !chrome.runtime?.onMessage) {
+        return;
+    }
+
+    chrome.runtime.onMessage.addListener((message) => {
+        if (message?.type === "prism:screenshotSanitizerTargets") {
+            console.log(
+                "PRISM screenshot sanitizer elements sent to sanitize.js:",
+                formatSanitizerTargetsForConsole(message.targets)
+            );
+            return false;
+        }
+
+        if (message?.type === "prism:screenshotSanitizerRegionTiming") {
+            console.log(
+                `Response Time from start to end of receiving time: ${message.timing?.seconds || 0} s`,
+                formatSanitizerTimingForConsole(message.timing)
+            );
+            return false;
+        }
+
+        if (message?.type === "prism:screenshotSanitizerDebugLog") {
+            logSanitizerDebugOutput(message.debugLog);
+        }
+
+        return false;
+    });
+}
+
 async function sendMessage() {
-    let startTime = performance.now();
     if (agentRunning) {
         return;
     }
@@ -513,8 +624,7 @@ async function sendMessage() {
         setAgentRunning(false);
     } finally {
         elements.messageInput.focus();
-        let endTime = performance.now();
-        console.log("Response Time from start to end of receiving time: " + ((endTime - startTime)/1000) + " s")
+
     }
 }
 
@@ -910,6 +1020,7 @@ async function loadAgentSnapshot() {
 
             renderChat(snapshot?.chat || []);
             setAgentRunning(snapshot?.state || false);
+            logSanitizerDebugOutput(snapshot?.sanitizerDebugLog);
             return;
         } catch (error) {
             if (!isMissingMessageReceiver(error)) {
@@ -940,6 +1051,10 @@ function bindStorageChanges() {
         if (changes[AGENT_STATE_STORAGE_KEY]) {
             setAgentRunning(changes[AGENT_STATE_STORAGE_KEY].newValue || false);
         }
+
+        if (changes[SANITIZER_DEBUG_STORAGE_KEY]) {
+            logSanitizerDebugOutput(changes[SANITIZER_DEBUG_STORAGE_KEY].newValue);
+        }
     });
 }
 
@@ -947,6 +1062,7 @@ async function init() {
     populateCategorySelect();
     bindEvents();
     bindStorageChanges();
+    bindRuntimeDebugMessages();
 
     try {
         await loadAgentSnapshot();

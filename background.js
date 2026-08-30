@@ -18,11 +18,13 @@ const LEGACY_COLLECTION_KEYS = new Set([
 const SCREENSHOT_SETTING_KEY = "prism.attachScreenshot";
 const CHAT_STORAGE_KEY = "prism.chatMessages";
 const AGENT_STATE_STORAGE_KEY = "prism.agentState";
+const SANITIZER_DEBUG_STORAGE_KEY = "prism.screenshotSanitizerDebugLog";
 const APP_STORAGE_KEYS = new Set([
     ...LEGACY_COLLECTION_KEYS,
     SCREENSHOT_SETTING_KEY,
     CHAT_STORAGE_KEY,
     AGENT_STATE_STORAGE_KEY,
+    SANITIZER_DEBUG_STORAGE_KEY,
 ]);
 
 const AGENT_URL = "http://127.0.0.1:8000/agent";
@@ -39,6 +41,7 @@ const HANDLED_MESSAGE_TYPES = new Set([
     "prism:getSnapshot",
     "prism:pageUserAction",
     "prism:keepAlive",
+    "prism:screenshotSanitizerDebugLog",
 ]);
 
 const userInputs = {};
@@ -1191,6 +1194,244 @@ function captureVisibleTabDataUrl(windowId) {
     });
 }
 
+function collectScreenshotSanitizerRegionsInPage() {
+    function summarizeUrl(value) {
+        if (!value) {
+            return "";
+        }
+
+        try {
+            const url = new URL(value, window.location.href);
+            return `${url.origin}${url.pathname}`;
+        } catch {
+            return "";
+        }
+    }
+
+    function elementSummary(element) {
+        return {
+            tag: element.tagName.toLowerCase(),
+            id: element.id || "",
+            classes: Array.from(element.classList || []).slice(0, 6),
+            source: summarizeUrl(
+                element.currentSrc ||
+                element.src ||
+                element.getAttribute("src") ||
+                ""
+            ),
+        };
+    }
+
+    function normalizeRect(rect) {
+        const left = Number(rect.left);
+        const top = Number(rect.top);
+        const right = Number(rect.right);
+        const bottom = Number(rect.bottom);
+
+        if (![left, top, right, bottom].every(Number.isFinite) ||
+            right <= left ||
+            bottom <= top) {
+            return null;
+        }
+
+        return {
+            left,
+            top,
+            right,
+            bottom,
+            width: right - left,
+            height: bottom - top,
+        };
+    }
+
+    function intersectRects(first, second) {
+        const left = Math.max(first.left, second.left);
+        const top = Math.max(first.top, second.top);
+        const right = Math.min(first.right, second.right);
+        const bottom = Math.min(first.bottom, second.bottom);
+
+        return normalizeRect({ left, top, right, bottom });
+    }
+
+    function clipsOverflow(style) {
+        return [style.overflow, style.overflowX, style.overflowY]
+            .some((value) => ["auto", "clip", "hidden", "scroll"].includes(value));
+    }
+
+    function isRendered(element) {
+        for (let current = element; current; current = current.parentElement) {
+            const style = window.getComputedStyle(current);
+
+            if (style.display === "none" ||
+                style.visibility === "hidden" ||
+                style.visibility === "collapse" ||
+                Number(style.opacity || 1) <= 0) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    function collectMediaElements(root = document, elements = [], seenElements = new Set(), seenRoots = new Set()) {
+        if (!root || seenRoots.has(root)) {
+            return elements;
+        }
+
+        seenRoots.add(root);
+
+        for (const element of root.querySelectorAll("img, iframe")) {
+            if (!seenElements.has(element)) {
+                seenElements.add(element);
+                elements.push(element);
+            }
+        }
+
+        for (const element of root.querySelectorAll("*")) {
+            if (element.shadowRoot) {
+                collectMediaElements(element.shadowRoot, elements, seenElements, seenRoots);
+            }
+        }
+
+        return elements;
+    }
+
+    function clippedViewportRectFor(element) {
+        const elementRect = normalizeRect(element.getBoundingClientRect());
+
+        if (!elementRect) {
+            return null;
+        }
+
+        let visibleRect = intersectRects(elementRect, {
+            left: 0,
+            top: 0,
+            right: window.innerWidth,
+            bottom: window.innerHeight,
+        });
+
+        if (!visibleRect) {
+            return null;
+        }
+
+        for (let current = element.parentElement; current; current = current.parentElement) {
+            if (current === document.body || current === document.documentElement) {
+                continue;
+            }
+
+            const style = window.getComputedStyle(current);
+
+            if (!clipsOverflow(style)) {
+                continue;
+            }
+
+            const clipRect = normalizeRect(current.getBoundingClientRect());
+
+            if (!clipRect) {
+                return null;
+            }
+
+            visibleRect = intersectRects(visibleRect, clipRect);
+
+            if (!visibleRect) {
+                return null;
+            }
+        }
+
+        return visibleRect;
+    }
+
+    const mediaElements = collectMediaElements();
+    const regions = mediaElements
+        .map((element) => {
+            if (!isRendered(element)) {
+                return null;
+            }
+
+            const visibleRect = clippedViewportRectFor(element);
+
+            if (!visibleRect) {
+                return null;
+            }
+
+            const elementInfo = elementSummary(element);
+
+            return {
+                tag: elementInfo.tag,
+                element: elementInfo,
+                x: visibleRect.left,
+                y: visibleRect.top,
+                width: visibleRect.width,
+                height: visibleRect.height,
+            };
+        })
+        .filter(Boolean);
+    const viewport = {
+        width: window.innerWidth,
+        height: window.innerHeight,
+        devicePixelRatio: window.devicePixelRatio || 1,
+    };
+
+    console.log("PRISM screenshot sanitizer visible media:", {
+        viewport,
+        candidateCount: mediaElements.length,
+        count: regions.length,
+        elements: regions.map((region, index) => ({
+            index,
+            tag: region.tag || region.element?.tag || "",
+            id: region.element?.id || "",
+            classes: region.element?.classes || [],
+            source: region.element?.source || "",
+            bbox: {
+                x: region.x,
+                y: region.y,
+                width: region.width,
+                height: region.height,
+            },
+        })),
+    });
+
+    return {
+        viewport,
+        regions,
+    };
+}
+
+function logScreenshotSanitizerTargets(targets) {
+    const regions = Array.isArray(targets?.regions) ? targets.regions : [];
+
+    console.log("PRISM screenshot sanitizer targets:", {
+        viewport: targets?.viewport || null,
+        count: regions.length,
+        elements: regions.map((region, index) => ({
+            index,
+            tag: region.tag || region.element?.tag || "",
+            id: region.element?.id || "",
+            classes: region.element?.classes || [],
+            source: region.element?.source || "",
+            bbox: {
+                x: region.x,
+                y: region.y,
+                width: region.width,
+                height: region.height,
+            },
+        })),
+    });
+}
+
+function broadcastScreenshotSanitizerTargets(targets) {
+    try {
+        chrome.runtime.sendMessage({
+            type: "prism:screenshotSanitizerTargets",
+            targets,
+        }, () => {
+            void chrome.runtime.lastError;
+        });
+    } catch {
+        // The popup may be closed; background logging above still records the target list.
+    }
+}
+
 async function ensureOffscreenDocument() {
     if (!chrome.offscreen?.createDocument) {
         throw new Error("Offscreen documents are unavailable in this browser.");
@@ -1243,12 +1484,30 @@ function sendRuntimeMessage(message) {
     });
 }
 
-async function sanitizeScreenshotDataUrl(dataUrl) {
+async function getScreenshotSanitizerTargets(tab) {
+    if (!isScriptableTab(tab)) {
+        return { viewport: null, regions: [] };
+    }
+
+    try {
+        const targets = await executeScript(tab.id, collectScreenshotSanitizerRegionsInPage);
+        logScreenshotSanitizerTargets(targets);
+        broadcastScreenshotSanitizerTargets(targets);
+        return targets;
+    } catch (error) {
+        console.warn("Failed to collect screenshot sanitizer regions:", error);
+        return { viewport: null, regions: [] };
+    }
+}
+
+async function sanitizeScreenshotDataUrl(dataUrl, sanitizerTargets = { viewport: null, regions: [] }) {
     await ensureOffscreenDocument();
 
     const response = await sendRuntimeMessage({
         type: "prism:sanitizeScreenshot",
         dataUrl,
+        mediaRegions: Array.isArray(sanitizerTargets?.regions) ? sanitizerTargets.regions : [],
+        viewport: sanitizerTargets?.viewport || null,
     });
 
     if (!response?.ok) {
@@ -1279,7 +1538,9 @@ async function takeScreenshotBase64(tab, run) {
     ensureRunActive(run);
     const dataUrl = await captureVisibleTabDataUrl(tab.windowId);
     ensureRunActive(run);
-    const base64Data = await sanitizeScreenshotDataUrl(dataUrl);
+    const sanitizerTargets = await getScreenshotSanitizerTargets(tab);
+    ensureRunActive(run);
+    const base64Data = await sanitizeScreenshotDataUrl(dataUrl, sanitizerTargets);
     ensureRunActive(run);
 
     return base64Data;
@@ -1804,7 +2065,20 @@ async function getSnapshot() {
         ok: true,
         chat: await getChatMessages(),
         state: await getAgentState(),
+        sanitizerDebugLog: await storageGetValue(SANITIZER_DEBUG_STORAGE_KEY, null),
     };
+}
+
+async function storeScreenshotSanitizerDebugLog(debugLog) {
+    const entry = {
+        kind: stringifyValue(debugLog?.kind || "debug"),
+        payload: debugLog?.payload ?? null,
+        createdAt: Date.now(),
+    };
+
+    await storageSetValue(SANITIZER_DEBUG_STORAGE_KEY, entry);
+
+    return { ok: true };
 }
 
 async function handlePageUserAction(message, sender) {
@@ -1852,6 +2126,10 @@ async function handleMessage(message, sender) {
 
     if (message.type === "prism:keepAlive") {
         return { ok: true, running: Boolean(activeRun) };
+    }
+
+    if (message.type === "prism:screenshotSanitizerDebugLog") {
+        return storeScreenshotSanitizerDebugLog(message.debugLog);
     }
 
     return { ok: false, error: "Unsupported PRISM message." };

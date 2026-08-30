@@ -26,12 +26,14 @@ export async function extractTextFromImage(imageSrc, options = {}) {
             text: result.data.text.trim()
         };
     } catch (error) {
-        console.error("OCR Error:", error);
+        const normalizedError = normalizeError(error, "OCR failed without an error message.");
+
+        console.error("OCR Error:", normalizedError);
 
         return {
             success: false,
             text: "",
-            error: error.message
+            error: normalizedError.message
         };
     }
 }
@@ -42,4 +44,30 @@ function extensionUrl(path) {
     }
 
     return path;
+}
+
+function normalizeError(error, fallbackMessage) {
+    if (error instanceof Error && error.message) {
+        return error;
+    }
+
+    if (typeof error === "string" && error.trim()) {
+        return new Error(error);
+    }
+
+    if (error && typeof error.message === "string" && error.message.trim()) {
+        return new Error(error.message);
+    }
+
+    try {
+        const serialized = JSON.stringify(error);
+
+        if (serialized && serialized !== "null" && serialized !== "undefined") {
+            return new Error(serialized);
+        }
+    } catch {
+        // Ignore serialization failures and use the fallback below.
+    }
+
+    return new Error(fallbackMessage);
 }

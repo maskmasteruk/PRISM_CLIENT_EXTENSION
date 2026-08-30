@@ -84,12 +84,13 @@ export async function loadPIIModel(
         };
 
     } catch (error) {
+        const normalizedError = normalizeError(error, "PII model failed to load without an error message.");
 
-        console.error("PII model loading error:", error);
+        console.error("PII model loading error:", normalizedError);
 
         return {
             success: false,
-            error: error.message
+            error: normalizedError.message
         };
     }
 }
@@ -155,13 +156,14 @@ export async function detectPII(
         };
 
     } catch (error) {
+        const normalizedError = normalizeError(error, "PII detection failed without an error message.");
 
-        console.error("PII detection error:", error);
+        console.error("PII detection error:", normalizedError);
 
         return {
             success: false,
             entities: [],
-            error: error.message
+            error: normalizedError.message
         };
     }
 }
@@ -172,4 +174,30 @@ export async function detectPII(
  */
 export function isPIIModelLoaded() {
     return detector !== null;
+}
+
+function normalizeError(error, fallbackMessage) {
+    if (error instanceof Error && error.message) {
+        return error;
+    }
+
+    if (typeof error === "string" && error.trim()) {
+        return new Error(error);
+    }
+
+    if (error && typeof error.message === "string" && error.message.trim()) {
+        return new Error(error.message);
+    }
+
+    try {
+        const serialized = JSON.stringify(error);
+
+        if (serialized && serialized !== "null" && serialized !== "undefined") {
+            return new Error(serialized);
+        }
+    } catch {
+        // Ignore serialization failures and use the fallback below.
+    }
+
+    return new Error(fallbackMessage);
 }
