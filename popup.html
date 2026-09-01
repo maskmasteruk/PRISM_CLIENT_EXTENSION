@@ -1,142 +1,215 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PRISM</title>
+    <title>PRISM UI</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
 </head>
+
 <body>
-<div class="app">
-    <header class="topbar">
-        <div class="brand-row">
+
+    <!-- Background System -->
+    <div class="bg-system">
+        <div class="bg-layer-base"></div>
+        <div class="bg-layer-logo">
+            <img src="./icons/logo.jpeg" alt="" aria-hidden="true">
+        </div>
+        <div class="bg-layer-spectral"></div>
+    </div>
+
+    <!-- Hidden inputs for pure CSS tab navigation -->
+    <input type="radio" name="nav-tabs" id="nav-agent" class="nav-radio" checked>
+    <input type="radio" name="nav-tabs" id="nav-vault" class="nav-radio">
+
+    <div class="app-container">
+
+        <!-- HEADER -->
+        <header class="top-header">
             <div class="brand">
-                <div class="logo" aria-hidden="true">
-                    <img src="icons/icon32.png" alt="">
+                <div class="logo">
+                    <img src="./icons/logo.jpeg" alt="PRISM Logo">
                 </div>
-                <div class="brand-copy">
-                    <div class="title">PRISM</div>
-                    <div class="subtitle">Privacy-preserving screen agent</div>
+                <span class="wordmark">PRISM</span>
+            </div>
+            <div class="header-right">
+                <div class="status-indicator">
+                    <span class="status-dot"></span>
+                    System Secure
                 </div>
             </div>
-            <span class="trust-pill">Local-first</span>
+        </header>
+
+        <div class="views-container">
+
+            <!-- ================= AGENT VIEW ================= -->
+            <main class="view-panel" id="view-agent">
+                <section class="chat-toolbar glass-card">
+                    <div class="agent-status-indicator">
+                        <span class="pulse-dot"></span>
+                        <strong>Agent Active</strong>
+                    </div>
+                    <div class="toolbar-actions">
+                        <button class="glass-btn secondary small btn-stop">Stop</button>
+                        <button class="glass-btn secondary small btn-clear">Clear</button>
+                    </div>
+                </section>
+
+                <section class="chat-history">
+                    <div class="chat-message prism">
+                        <div class="avatar"><img src="./icons/logo.jpeg" alt="PRISM"></div>
+                        <div class="bubble glass-card">
+                            <div class="spectral-underglow"></div>
+                            <p><strong>Your Privacy Guardian</strong></p>
+                            <p>PRISM analyzes your screen intelligently while keeping sensitive information protected.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="chat-message user">
+                        <div class="bubble glass-card">
+                            <div class="spectral-underglow subtle"></div>
+                            <button class="glass-btn primary btn-fill" style="margin-top: 8px;">Fill the form</button>
+                        </div>
+                    </div>
+
+                    <div class="chat-message prism">
+                        <div class="avatar"><img src="./icons/logo.jpeg" alt="PRISM"></div>
+                        <div class="bubble glass-card">
+                            <p>Running agent on: Personal Information – PII Detection Test</p>
+                        </div>
+                    </div>
+
+                    <div class="chat-message prism">
+                        <div class="avatar"><img src="./icons/logo.jpeg" alt="PRISM"></div>
+                        <div class="bubble glass-card">
+                            <p>Filling the form with dummy/test data as instructed by the form.</p>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="input-area glass-card">
+                    <div class="input-container glass-inset">
+                        <div class="spectral-underglow"></div>
+                        <textarea rows="1" placeholder="Ask your Privacy Guardian..." class="chat-input"></textarea>
+                        <button class="glass-btn primary action-btn btn-send">Send</button>
+                    </div>
+                    <div class="protection-status">
+                        <label class="toggle-switch small">
+                            <input type="checkbox" checked>
+                            <span class="slider"></span>
+                        </label>
+                        <div class="protection-text">
+                            <strong>SCREENSHOT</strong>
+                            <span>A screenshot is included with every request and processed locally.</span>
+                        </div>
+                    </div>
+                </section>
+            </main>
+
+            <!-- ================= VAULT VIEW ================= -->
+            <main class="view-panel" id="view-vault">
+                <section class="vault-header glass-card">
+                    <div class="vault-title">
+                        <h2>Secure Vault</h2>
+                        <p>Your sensitive information stays protected.</p>
+                    </div>
+                    <div class="vault-badge">9 saved</div>
+                </section>
+
+                <section class="vault-controls">
+                    <div class="search-bar glass-inset">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <circle cx="11" cy="11" r="8" />
+                            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                        </svg>
+                        <input type="text" placeholder="Search protected secrets...">
+                    </div>
+                    <button class="glass-btn primary full-width btn-vault">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <line x1="12" y1="5" x2="12" y2="19" />
+                            <line x1="5" y1="12" x2="19" y2="12" />
+                        </svg>
+                        Add Secret
+                    </button>
+                    <div class="action-row">
+                        <button class="glass-btn secondary btn-vault">Export</button>
+                        <button class="glass-btn secondary btn-vault">Import</button>
+                    </div>
+                </section>
+
+                <section class="secrets-list">
+                    <!-- Secret Item 1 -->
+                    <div class="secret-card glass-card">
+                        <div class="secret-header">
+                            <h3>date_of_birth</h3>
+                            <span class="tag">other</span>
+                        </div>
+                        <div class="secret-body">
+                            <div class="hidden-value">•••••••••• <span class="hint">(10 chars)</span></div>
+                            <p class="desc">Date Of Birth</p>
+                        </div>
+                        <div class="secret-actions">
+                            <button class="glass-btn small secondary btn-vault">Copy</button>
+                            <button class="glass-btn small secondary btn-vault">Edit</button>
+                            <button class="glass-btn small danger btn-delete">Delete</button>
+                        </div>
+                    </div>
+
+                    <!-- Secret Item 2 -->
+                    <div class="secret-card glass-card">
+                        <div class="secret-header">
+                            <h3>email</h3>
+                            <span class="tag">email</span>
+                        </div>
+                        <div class="secret-body">
+                            <div class="hidden-value">•••••••••••••• <span class="hint">(14 chars)</span></div>
+                            <p class="desc">Primary contact email</p>
+                        </div>
+                        <div class="secret-actions">
+                            <button class="glass-btn small secondary btn-vault">Copy</button>
+                            <button class="glass-btn small secondary btn-vault">Edit</button>
+                            <button class="glass-btn small danger btn-delete">Delete</button>
+                        </div>
+                    </div>
+                </section>
+            </main>
+
         </div>
 
-        <div class="tabs" role="tablist" aria-label="Popup sections">
-            <button
-                    class="tab active"
-                    id="agentTab"
-                    type="button"
-                    role="tab"
-                    aria-selected="true"
-                    aria-controls="agentView"
-            >
-                Agent
-            </button>
-            <button
-                    class="tab"
-                    id="privateTab"
-                    type="button"
-                    role="tab"
-                    aria-selected="false"
-                    aria-controls="privateView"
-            >
-                Vault
-            </button>
-        </div>
-    </header>
+        <!-- FLOATING BOTTOM NAVIGATION -->
+        <nav class="floating-nav-container">
+            <div class="floating-nav glass-card">
+                <!-- Animated selection pill (Absolute position) -->
+                <div class="nav-active-indicator">
+                    <div class="spectral-reflection"></div>
+                </div>
 
-    <main class="view active" id="agentView" role="tabpanel" aria-labelledby="agentTab">
-        <section class="chat-toolbar" aria-label="Agent controls">
-            <strong class="agent-status" id="agentStatus">Idle</strong>
-            <button class="secondary quiet" id="stopAgent" type="button" disabled>Stop</button>
-            <button class="secondary quiet" id="clearChats" type="button">Clear Chats</button>
-        </section>
-
-        <section class="chat-shell" aria-label="Conversation">
-            <div class="chat" id="chat" aria-live="polite"></div>
-        </section>
-
-        <section class="input-area" aria-label="Message composer">
-            <div class="input-box">
-                <label class="sr-only" for="messageInput">Ask PRISM</label>
-                <textarea id="messageInput" rows="1" placeholder="Ask PRISM" autocomplete="off"></textarea>
-                <button class="primary send-button" id="send" type="button" title="Send message">Send</button>
-            </div>
-
-            <div class="screenshot-option">
-                <label class="screenshot-toggle">
-                    <input type="checkbox" id="attachScreenshot">
-                    <span class="toggle-slider" aria-hidden="true"></span>
-                    <span class="toggle-label">Attach screenshot</span>
+                <label for="nav-agent" class="nav-item" data-tab="agent">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                    </svg>
+                    <span>AGENT</span>
+                </label>
+                <label for="nav-vault" class="nav-item" data-tab="vault">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                    </svg>
+                    <span>VAULT</span>
                 </label>
             </div>
-        </section>
-    </main>
+        </nav>
+    </div>
 
-    <main class="view" id="privateView" role="tabpanel" aria-labelledby="privateTab" hidden>
-        <section class="vault-header">
-            <div>
-                <h1>Local vault</h1>
-                <p>Secrets are stored in browser storage and referenced by key.</p>
-            </div>
-            <span class="vault-count" id="secretCount">0 saved</span>
-        </section>
-
-        <section class="toolbar" aria-label="Secret controls">
-            <label class="search-shell" for="secretSearch">
-                <span class="search-icon" aria-hidden="true"></span>
-                <input id="secretSearch" type="search" placeholder="Search keys">
-            </label>
-            <div class="toolbar-actions">
-                <button class="primary" id="addSecret" type="button">Add Secret</button>
-                <button class="secondary" id="exportSecrets" type="button">Export</button>
-                <button class="secondary" id="importSecrets" type="button">Import</button>
-            </div>
-            <input class="hidden" id="importSecretsFile" type="file" accept="application/json,.json">
-        </section>
-
-        <section class="secret-list" id="secretList" aria-live="polite"></section>
-
-        <form class="secret-form hidden" id="secretForm">
-            <div class="form-header">
-                <div>
-                    <h2>Secret details</h2>
-                    <p>Values are hidden in the list view.</p>
-                </div>
-            </div>
-
-            <input type="hidden" id="secretId">
-            <label>
-                Key
-                <input id="secretKey" required placeholder="email">
-            </label>
-            <label>
-                Value
-                <div class="secret-value-row">
-                    <input id="secretValue" required type="password" autocomplete="off" placeholder="Stored locally">
-                    <button class="secondary" id="toggleReveal" type="button">Reveal</button>
-                </div>
-            </label>
-            <label>
-                Category
-                <select id="secretCategory"></select>
-            </label>
-            <label>
-                Description
-                <input id="secretDescription" placeholder="Optional">
-            </label>
-            <div class="form-actions">
-                <button class="primary" id="saveSecret" type="submit">Save</button>
-                <button class="secondary" id="cancelSecret" type="button">Cancel</button>
-                <button id="deleteSecret" class="danger hidden" type="button">Delete</button>
-            </div>
-        </form>
-
-        <button class="danger clear-button" id="clearSecrets" type="button">Clear All Secrets</button>
-    </main>
-</div>
-
-<script type="module" src="popup.js"></script>
 </body>
+
 </html>
