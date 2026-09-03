@@ -1550,10 +1550,11 @@ function screenshotDataUrlFromBase64(base64Data) {
     return `data:image/png;base64,${base64Data}`;
 }
 
-async function appendScreenshotPreview(step, base64Data, messageId = "") {
-    const message = `Step ${step + 1}: agent requested a screenshot.\nScreenshot sent to server.`;
+async function appendScreenshotPreview(step, base64Data, messageId = "", message = "") {
+    const previewMessage = message ||
+        `Step ${step + 1}: agent requested a screenshot.\nScreenshot sent to server.`;
     const updates = {
-        text: message,
+        text: previewMessage,
         imageDataUrl: screenshotDataUrlFromBase64(base64Data),
         includeInAgentHistory: false,
     };
@@ -1563,7 +1564,7 @@ async function appendScreenshotPreview(step, base64Data, messageId = "") {
     } catch (error) {
         console.warn("Failed to store screenshot preview:", error);
         await updateChatMessage(messageId, {
-            text: message,
+            text: previewMessage,
             includeInAgentHistory: false,
         });
     }
@@ -1579,6 +1580,10 @@ function buildAvailableSecrets(secrets) {
 
 function buildUserInputs() {
     return Object.entries(userInputs).map(([key, value]) => ({ key, value }));
+}
+
+function buildScreenshotOnlyBrowserContext() {
+    return { elements: [] };
 }
 
 async function fetchJsonWithTimeout(url, options, timeoutMs, run) {
@@ -1641,14 +1646,14 @@ async function fetchJsonWithTimeout(url, options, timeoutMs, run) {
     }
 }
 
-async function callAgent({ run, query, browser, screenshotBase64, secrets }) {
+async function callAgent({ run, query, browser, screenshotBase64, secrets, screenshotOnly = false }) {
     const payload = {
         request_id: run.requestId,
         query,
-        browser,
+        browser: screenshotOnly ? buildScreenshotOnlyBrowserContext() : browser,
         available_secrets: buildAvailableSecrets(secrets),
         user_inputs: buildUserInputs(),
-        previous_messages: normalizeAgentPreviousMessages(run.previousMessages),
+        previous_messages: screenshotOnly ? [] : normalizeAgentPreviousMessages(run.previousMessages),
         screenshot_base64: screenshotBase64,
     };
 
@@ -1664,6 +1669,82 @@ async function callAgent({ run, query, browser, screenshotBase64, secrets }) {
         AGENT_REQUEST_TIMEOUT_MS,
         run
     );
+}
+
+function agentErrorText(value) {
+    if (value instanceof Error) {
+        return value.message;
+    }
+
+    if (typeof value === "string") {
+        return value;
+    }
+
+    if (!value || typeof value !== "object") {
+        return "";
+    }
+
+    return [
+        value.error,
+        value.message,
+        value.detail,
+        value.type,
+        value.code,
+    ].map(stringifyValue).filter(Boolean).join("\n");
+}
+
+function isPayloadTooLargeAgentError(value) {
+    const text = agentErrorText(value).toLowerCase();
+
+    return /\b413\b/.test(text) ||
+        text.includes("request too large") ||
+        (text.includes("tokens per minute") && text.includes("requested")) ||
+        (text.includes("tpm") && text.includes("requested"));
+}
+
+function isPayloadTooLargeAgentResponse(response) {
+    return response?.status === "error" &&
+        isPayloadTooLargeAgentError(response.error || response.message || response);
+}
+
+async function retryAgentWithScreenshotOnly({ run, query, tab, step, screenshotBase64, secrets }) {
+    const retryMessageId = makeRequestId();
+    const retryMessage = `Step ${step + 1}: request was too large. Retrying with screenshot only.`;
+
+    await appendChat("received", retryMessage, {
+        id: retryMessageId,
+        includeInAgentHistory: false,
+    });
+
+    let retryScreenshotBase64 = screenshotBase64;
+
+    if (!retryScreenshotBase64) {
+        try {
+            retryScreenshotBase64 = await takeScreenshotBase64(tab, run);
+        } catch (error) {
+            await updateChatMessage(retryMessageId, {
+                text: `${retryMessage}\nScreenshot capture failed: ${error.message}`,
+                includeInAgentHistory: false,
+            });
+            throw error;
+        }
+    }
+
+    await appendScreenshotPreview(
+        step,
+        retryScreenshotBase64,
+        retryMessageId,
+        `${retryMessage}\nScreenshot sent to server.`
+    );
+
+    return callAgent({
+        run,
+        query,
+        browser: buildScreenshotOnlyBrowserContext(),
+        screenshotBase64: retryScreenshotBase64,
+        secrets,
+        screenshotOnly: true,
+    });
 }
 
 function getSecretValue(secrets, secretKey) {
@@ -1807,6 +1888,7 @@ async function runBrowserAgent(run, query) {
     await registerManualActionStopper(tab, run);
 
     let screenshotBase64 = null;
+    let screenshotOnlyMode = false;
 
     for (let step = 0; step < MAX_AGENT_STEPS; step += 1) {
         ensureRunActive(run);
@@ -1819,9 +1901,11 @@ async function runBrowserAgent(run, query) {
         ensureRunActive(run);
         await registerManualActionStopper(tab, run);
 
-        const browser = await buildBrowserContext(tab, run);
+        const browser = screenshotOnlyMode
+            ? buildScreenshotOnlyBrowserContext()
+            : await buildBrowserContext(tab, run);
 
-        if (await getAttachScreenshotSetting()) {
+        if (screenshotOnlyMode || await getAttachScreenshotSetting()) {
             try {
                 screenshotBase64 = await takeScreenshotBase64(tab, run);
             } catch (error) {
@@ -1831,18 +1915,55 @@ async function runBrowserAgent(run, query) {
                 );
 
                 screenshotBase64 = null;
+
+                if (screenshotOnlyMode) {
+                    run.finalStatus = "screenshot_failed";
+                    return;
+                }
             }
         }
 
-        const response = await callAgent({
-            run,
-            query,
-            browser,
-            screenshotBase64,
-            secrets,
-        });
+        let response;
+
+        try {
+            response = await callAgent({
+                run,
+                query,
+                browser,
+                screenshotBase64,
+                secrets,
+                screenshotOnly: screenshotOnlyMode,
+            });
+        } catch (error) {
+            if (screenshotOnlyMode || !isPayloadTooLargeAgentError(error)) {
+                throw error;
+            }
+
+            screenshotOnlyMode = true;
+            response = await retryAgentWithScreenshotOnly({
+                run,
+                query,
+                tab,
+                step,
+                screenshotBase64,
+                secrets,
+            });
+        }
 
         ensureRunActive(run);
+
+        if (!screenshotOnlyMode && isPayloadTooLargeAgentResponse(response)) {
+            screenshotOnlyMode = true;
+            response = await retryAgentWithScreenshotOnly({
+                run,
+                query,
+                tab,
+                step,
+                screenshotBase64,
+                secrets,
+            });
+            ensureRunActive(run);
+        }
 
         const status = response?.status;
         const actions = Array.isArray(response?.actions)
