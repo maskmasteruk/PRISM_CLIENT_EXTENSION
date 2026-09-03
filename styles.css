@@ -95,7 +95,8 @@ h6 {
 
 button,
 input,
-textarea {
+textarea,
+select {
     font-family: inherit;
     border: none;
     outline: none;
@@ -342,6 +343,12 @@ input[type="radio"].nav-radio {
     transform: translateY(1px) scale(0.98);
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4), inset 0 2px 8px rgba(0, 0, 0, 0.3);
     border-top-color: var(--border-subtle);
+}
+
+.glass-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+    transform: none;
 }
 
 /* Button Sizing Variants */
@@ -940,6 +947,26 @@ input[type="radio"].nav-radio {
     margin-bottom: 0;
 }
 
+.message-text {
+    white-space: pre-wrap;
+}
+
+.message-image {
+    display: block;
+    width: 100%;
+    max-height: 180px;
+    object-fit: contain;
+    border-radius: var(--radius-sm);
+    margin-top: var(--space-1);
+    border: 1px solid var(--border-subtle);
+}
+
+.empty-state {
+    padding: var(--space-2);
+    color: var(--text-secondary);
+    text-align: center;
+}
+
 .input-area {
     margin-top: auto;
     padding: var(--space-2);
@@ -1127,6 +1154,75 @@ input[type="radio"].nav-radio {
     display: flex;
     gap: var(--space-1);
     margin-top: 4px;
+}
+
+.hidden {
+    display: none !important;
+}
+
+.secret-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-2);
+}
+
+.field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.field span {
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.field input,
+.field select,
+.field textarea {
+    width: 100%;
+    min-height: 38px;
+    padding: var(--space-1) 10px;
+    border-radius: var(--radius-sm);
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-primary);
+    font-size: 13px;
+}
+
+.field textarea {
+    resize: vertical;
+}
+
+.field select option {
+    background: var(--bg-graphite);
+    color: var(--text-primary);
+}
+
+.secret-value-control {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 4px;
+}
+
+.secret-value-control input {
+    border: 0;
+    background: transparent;
+    min-height: 30px;
+}
+
+.form-actions {
+    display: flex;
+    gap: var(--space-1);
+}
+
+.form-actions button {
+    flex: 1;
 }
 
 /* ==================================================

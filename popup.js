@@ -29,26 +29,29 @@ const APP_STORAGE_KEYS = new Set([
 const MISSING_RECEIVER_MESSAGE = "Receiving end does not exist";
 
 const $ = (id) => document.getElementById(id);
+const qs = (selector) => document.querySelector(selector);
 
 const elements = {
-    agentTab: $("agentTab"),
-    privateTab: $("privateTab"),
-    agentView: $("agentView"),
-    privateView: $("privateView"),
-    chat: $("chat"),
-    agentStatus: $("agentStatus"),
-    messageInput: $("messageInput"),
-    send: $("send"),
-    stopAgent: $("stopAgent"),
-    clearChats: $("clearChats"),
-    attachScreenshot: $("attachScreenshot"),
-    secretSearch: $("secretSearch"),
-    addSecret: $("addSecret"),
+    agentTab: $("agentTab") || qs('label[for="nav-agent"]'),
+    privateTab: $("privateTab") || qs('label[for="nav-vault"]'),
+    agentRadio: $("nav-agent"),
+    privateRadio: $("nav-vault"),
+    agentView: $("agentView") || $("view-agent"),
+    privateView: $("privateView") || $("view-vault"),
+    chat: $("chat") || qs(".chat-history"),
+    agentStatus: $("agentStatus") || qs(".agent-status-indicator strong"),
+    messageInput: $("messageInput") || qs(".chat-input"),
+    send: $("send") || qs(".btn-send"),
+    stopAgent: $("stopAgent") || qs(".btn-stop"),
+    clearChats: $("clearChats") || qs(".btn-clear"),
+    attachScreenshot: $("attachScreenshot") || qs(".protection-status input[type='checkbox']"),
+    secretSearch: $("secretSearch") || qs(".search-bar input"),
+    addSecret: $("addSecret") || qs(".vault-controls .btn-vault.primary"),
     exportSecrets: $("exportSecrets"),
     importSecrets: $("importSecrets"),
     importSecretsFile: $("importSecretsFile"),
-    secretList: $("secretList"),
-    secretCount: $("secretCount"),
+    secretList: $("secretList") || qs(".secrets-list"),
+    secretCount: $("secretCount") || qs(".vault-badge"),
     secretForm: $("secretForm"),
     secretId: $("secretId"),
     secretKey: $("secretKey"),
@@ -352,6 +355,14 @@ async function loadSecrets() {
 function setActiveView(viewName) {
     const showSensitive = viewName === "private";
 
+    if (elements.agentRadio) {
+        elements.agentRadio.checked = !showSensitive;
+    }
+
+    if (elements.privateRadio) {
+        elements.privateRadio.checked = showSensitive;
+    }
+
     elements.agentTab.classList.toggle("active", !showSensitive);
     elements.privateTab.classList.toggle("active", showSensitive);
     elements.agentTab.setAttribute("aria-selected", String(!showSensitive));
@@ -440,14 +451,30 @@ function resizeMessageInput() {
 }
 
 function createMessageElement(chatMessage) {
+    const isSent = chatMessage.type === "sent";
     const message = document.createElement("div");
-    message.className = `message ${chatMessage.type}${chatMessage.imageDataUrl ? " has-image" : ""}`;
+    message.className = `chat-message ${isSent ? "user" : "prism"}${chatMessage.imageDataUrl ? " has-image" : ""}`;
+
+    if (!isSent) {
+        const avatar = document.createElement("div");
+        avatar.className = "avatar";
+
+        const logo = document.createElement("img");
+        logo.src = "./icons/logo.jpeg";
+        logo.alt = "PRISM";
+
+        avatar.appendChild(logo);
+        message.appendChild(avatar);
+    }
+
+    const bubble = document.createElement("div");
+    bubble.className = "bubble glass-card";
 
     if (chatMessage.text) {
         const text = document.createElement("div");
         text.className = "message-text";
         text.textContent = chatMessage.text;
-        message.appendChild(text);
+        bubble.appendChild(text);
     }
 
     if (chatMessage.imageDataUrl) {
@@ -456,8 +483,39 @@ function createMessageElement(chatMessage) {
         image.src = chatMessage.imageDataUrl;
         image.alt = chatMessage.text || "Screenshot sent to server";
         image.loading = "lazy";
-        message.appendChild(image);
+        bubble.appendChild(image);
     }
+
+    message.appendChild(bubble);
+
+    return message;
+}
+
+function createQuickFillElement() {
+    const message = document.createElement("div");
+    message.className = "chat-message user";
+
+    const bubble = document.createElement("div");
+    bubble.className = "bubble glass-card";
+
+    const glow = document.createElement("div");
+    glow.className = "spectral-underglow subtle";
+
+    const button = document.createElement("button");
+    button.className = "glass-btn primary btn-fill";
+    button.type = "button";
+    button.textContent = "Fill the form";
+    button.addEventListener("click", () => {
+        if (agentRunning) {
+            return;
+        }
+
+        elements.messageInput.value = "Fill the form";
+        void sendMessage();
+    });
+
+    bubble.append(glow, button);
+    message.appendChild(bubble);
 
     return message;
 }
@@ -493,6 +551,8 @@ function renderChat(messages) {
 
     if (chatMessages.length === 0) {
         appendMessage("received", "Enter a prompt to run PRISM on the active tab.");
+        elements.chat.appendChild(createQuickFillElement());
+        elements.chat.scrollTop = elements.chat.scrollHeight;
         return;
     }
 
@@ -758,7 +818,7 @@ function recordMatchesSearch(record, search) {
 
 function createMetaChip(text) {
     const chip = document.createElement("span");
-    chip.className = "meta-chip";
+    chip.className = "tag";
     chip.textContent = text;
     return chip;
 }
@@ -782,34 +842,34 @@ function renderSecrets() {
 
     filteredSecrets.forEach((record) => {
         const row = document.createElement("article");
-        row.className = "secret-row";
+        row.className = "secret-card glass-card";
 
-        const content = document.createElement("div");
-        content.className = "secret-content";
+        const header = document.createElement("div");
+        header.className = "secret-header";
 
-        const key = document.createElement("div");
-        key.className = "secret-key";
+        const key = document.createElement("h3");
         key.textContent = record.key;
 
+        header.append(key, createMetaChip(record.category));
+
+        const body = document.createElement("div");
+        body.className = "secret-body";
+
         const value = document.createElement("div");
-        value.className = "secret-value";
+        value.className = "hidden-value";
         value.textContent = maskSecretValue(record.value);
 
         const description = document.createElement("div");
-        description.className = "secret-description";
+        description.className = "desc";
         description.textContent = record.description || "No description";
 
-        const meta = document.createElement("div");
-        meta.className = "secret-meta";
-        meta.appendChild(createMetaChip(record.category));
-
-        content.append(key, value, description, meta);
+        body.append(value, description);
 
         const actions = document.createElement("div");
         actions.className = "secret-actions";
 
         const copyButton = document.createElement("button");
-        copyButton.className = "secondary";
+        copyButton.className = "glass-btn small secondary btn-vault";
         copyButton.type = "button";
         copyButton.textContent = "Copy";
         copyButton.addEventListener("click", async () => {
@@ -818,19 +878,19 @@ function renderSecrets() {
         });
 
         const editButton = document.createElement("button");
-        editButton.className = "secondary";
+        editButton.className = "glass-btn small secondary btn-vault";
         editButton.type = "button";
         editButton.textContent = "Edit";
         editButton.addEventListener("click", () => showSecretForm(record));
 
         const deleteButton = document.createElement("button");
-        deleteButton.className = "danger";
+        deleteButton.className = "glass-btn small danger btn-delete";
         deleteButton.type = "button";
         deleteButton.textContent = "Delete";
         deleteButton.addEventListener("click", () => deleteRecord(record.key));
 
         actions.append(copyButton, editButton, deleteButton);
-        row.append(content, actions);
+        row.append(header, body, actions);
         elements.secretList.appendChild(row);
     });
 }
