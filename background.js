@@ -761,7 +761,7 @@ function extractDomInPage() {
     };
 }
 
-function executeAgentActionInPage(action, secretValue) {
+function executeAgentActionInPage(action, secretValue, screenshotSize = null) {
     const actionType = action.type;
 
     function findElement(elementId) {
@@ -799,6 +799,23 @@ function executeAgentActionInPage(action, secretValue) {
         element.scrollIntoView({ block: "center", inline: "center" });
     }
 
+    function dispatchInputEvent(element, data, inputType = "") {
+        const eventOptions = {
+            bubbles: true,
+            data,
+        };
+
+        if (inputType) {
+            eventOptions.inputType = inputType;
+        }
+
+        try {
+            element.dispatchEvent(new InputEvent("input", eventOptions));
+        } catch {
+            element.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+    }
+
     function setElementValue(element, value) {
         const textValue = String(value ?? "");
 
@@ -808,7 +825,7 @@ function executeAgentActionInPage(action, secretValue) {
             element.focus();
             document.execCommand("selectAll", false, null);
             document.execCommand("insertText", false, textValue);
-            element.dispatchEvent(new InputEvent("input", { bubbles: true, data: textValue }));
+            dispatchInputEvent(element, textValue);
             element.dispatchEvent(new Event("change", { bubbles: true }));
             return;
         }
@@ -828,7 +845,7 @@ function executeAgentActionInPage(action, secretValue) {
             element.value = textValue;
         }
 
-        element.dispatchEvent(new InputEvent("input", { bubbles: true, data: textValue }));
+        dispatchInputEvent(element, textValue);
         element.dispatchEvent(new Event("change", { bubbles: true }));
     }
 
@@ -900,7 +917,265 @@ function executeAgentActionInPage(action, secretValue) {
         target.dispatchEvent(new KeyboardEvent("keyup", eventOptions));
     }
 
+    function resolveActionPoint() {
+        const rawX = Number(action.x);
+        const rawY = Number(action.y);
+
+        if (!Number.isFinite(rawX) || !Number.isFinite(rawY)) {
+            throw new Error(`Coordinate action requires finite x/y: ${actionType}`);
+        }
+
+        const coordinateSystem = action.coordinate_system || "viewport";
+
+        if (coordinateSystem === "viewport") {
+            return {
+                clientX: rawX,
+                clientY: rawY,
+            };
+        }
+
+        if (coordinateSystem !== "screenshot") {
+            throw new Error(`Unsupported coordinate system: ${coordinateSystem}`);
+        }
+
+        const screenshotWidth = Number(
+            action.screenshot_width ??
+            action.screenshotWidth ??
+            screenshotSize?.width
+        );
+        const screenshotHeight = Number(
+            action.screenshot_height ??
+            action.screenshotHeight ??
+            screenshotSize?.height
+        );
+
+        if (!Number.isFinite(screenshotWidth) ||
+            !Number.isFinite(screenshotHeight) ||
+            screenshotWidth <= 0 ||
+            screenshotHeight <= 0) {
+            throw new Error("Screenshot coordinate action requires screenshot dimensions.");
+        }
+
+        return {
+            clientX: rawX * window.innerWidth / screenshotWidth,
+            clientY: rawY * window.innerHeight / screenshotHeight,
+        };
+    }
+
+    function targetAtPoint(point) {
+        const target = document.elementFromPoint(point.clientX, point.clientY);
+
+        if (!target) {
+            throw new Error(
+                `Coordinate target is outside the current viewport: ${point.clientX}, ${point.clientY}`
+            );
+        }
+
+        return target;
+    }
+
+    function dispatchPointerEvent(target, type, point, buttons) {
+        if (typeof PointerEvent !== "function") {
+            return;
+        }
+
+        target.dispatchEvent(new PointerEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+            view: window,
+            pointerId: 1,
+            pointerType: "mouse",
+            isPrimary: true,
+            button: 0,
+            buttons,
+            clientX: point.clientX,
+            clientY: point.clientY,
+        }));
+    }
+
+    function dispatchMouseEvent(target, type, point, buttons) {
+        target.dispatchEvent(new MouseEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+            view: window,
+            button: 0,
+            buttons,
+            clientX: point.clientX,
+            clientY: point.clientY,
+        }));
+    }
+
+    function focusTarget(target) {
+        const focusable = target.closest?.([
+            "input",
+            "textarea",
+            "select",
+            "button",
+            "a[href]",
+            "[tabindex]:not([tabindex='-1'])",
+            "[contenteditable='true']",
+        ].join(",")) || target;
+
+        focusable.focus?.({ preventScroll: true });
+        return focusable;
+    }
+
+    function moveToPoint(point) {
+        const target = targetAtPoint(point);
+
+        dispatchPointerEvent(target, "pointerover", point, 0);
+        dispatchMouseEvent(target, "mouseover", point, 0);
+        dispatchPointerEvent(target, "pointermove", point, 0);
+        dispatchMouseEvent(target, "mousemove", point, 0);
+
+        return target;
+    }
+
+    function clickPoint(point) {
+        const target = moveToPoint(point);
+
+        focusTarget(target);
+        dispatchPointerEvent(target, "pointerdown", point, 1);
+        dispatchMouseEvent(target, "mousedown", point, 1);
+        dispatchPointerEvent(target, "pointerup", point, 0);
+        dispatchMouseEvent(target, "mouseup", point, 0);
+        dispatchMouseEvent(target, "click", point, 0);
+
+        return target;
+    }
+
+    function isTextInputElement(element) {
+        const tagName = element?.tagName?.toLowerCase();
+
+        if (tagName === "textarea") {
+            return true;
+        }
+
+        if (tagName !== "input") {
+            return false;
+        }
+
+        const inputType = String(element.type || "text").toLowerCase();
+        return ![
+            "button",
+            "checkbox",
+            "color",
+            "file",
+            "hidden",
+            "image",
+            "radio",
+            "range",
+            "reset",
+            "submit",
+        ].includes(inputType);
+    }
+
+    function textTargetFor(clickedTarget) {
+        const active = document.activeElement;
+
+        if (active?.isContentEditable || isTextInputElement(active)) {
+            return active;
+        }
+
+        const closestEditable = clickedTarget.closest?.("input, textarea, [contenteditable='true']");
+
+        if (closestEditable) {
+            closestEditable.focus?.({ preventScroll: true });
+            return closestEditable;
+        }
+
+        return active || clickedTarget;
+    }
+
+    function insertTextIntoInput(element, textValue) {
+        const value = String(element.value || "");
+        let selectionStart = value.length;
+        let selectionEnd = value.length;
+
+        try {
+            if (typeof element.selectionStart === "number") {
+                selectionStart = element.selectionStart;
+            }
+
+            if (typeof element.selectionEnd === "number") {
+                selectionEnd = element.selectionEnd;
+            }
+        } catch {
+            selectionStart = value.length;
+            selectionEnd = value.length;
+        }
+
+        if (typeof element.setRangeText === "function") {
+            try {
+                element.setRangeText(textValue, selectionStart, selectionEnd, "end");
+                dispatchInputEvent(element, textValue, "insertText");
+                element.dispatchEvent(new Event("change", { bubbles: true }));
+                return;
+            } catch {
+                // Some input types expose setRangeText but do not support text selection.
+            }
+        }
+
+        const nextValue = value.slice(0, selectionStart) + textValue + value.slice(selectionEnd);
+        const prototype = Object.getPrototypeOf(element);
+        const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
+
+        if (descriptor?.set) {
+            descriptor.set.call(element, nextValue);
+        } else {
+            element.value = nextValue;
+        }
+
+        dispatchInputEvent(element, textValue, "insertText");
+        element.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    function dispatchKeyboardTyping(target, textValue) {
+        for (const character of Array.from(textValue)) {
+            const key = character === "\n" ? "Enter" : character;
+            const eventOptions = {
+                key,
+                bubbles: true,
+                cancelable: true,
+            };
+
+            target.dispatchEvent(new KeyboardEvent("keydown", eventOptions));
+            target.dispatchEvent(new KeyboardEvent("keypress", eventOptions));
+            target.dispatchEvent(new KeyboardEvent("keyup", eventOptions));
+        }
+    }
+
+    function typeTextAtPoint(point, text) {
+        const clickedTarget = clickPoint(point);
+        const textValue = String(text ?? "");
+        const target = textTargetFor(clickedTarget);
+
+        if (target?.isContentEditable) {
+            target.focus?.({ preventScroll: true });
+            document.execCommand("insertText", false, textValue);
+            dispatchInputEvent(target, textValue, "insertText");
+            target.dispatchEvent(new Event("change", { bubbles: true }));
+            return;
+        }
+
+        if (isTextInputElement(target)) {
+            target.focus?.({ preventScroll: true });
+            insertTextIntoInput(target, textValue);
+            return;
+        }
+
+        dispatchKeyboardTyping(target || document.body, textValue);
+    }
+
     if (actionType === "click") {
+        if (!action.element_id) {
+            const point = resolveActionPoint();
+            clickPoint(point);
+            return { ok: true, coordinateTargeted: true };
+        }
+
         const element = getElement(action.element_id);
         bringIntoView(element);
         element.focus?.({ preventScroll: true });
@@ -909,11 +1184,23 @@ function executeAgentActionInPage(action, secretValue) {
     }
 
     if (actionType === "move") {
+        if (!action.element_id) {
+            const point = resolveActionPoint();
+            moveToPoint(point);
+            return { ok: true, coordinateTargeted: true };
+        }
+
         dispatchHover(getElement(action.element_id));
         return { ok: true };
     }
 
     if (actionType === "type_text") {
+        if (!action.element_id) {
+            const point = resolveActionPoint();
+            typeTextAtPoint(point, action.text);
+            return { ok: true, coordinateTargeted: true };
+        }
+
         setElementValue(getElement(action.element_id), action.text);
         return { ok: true };
     }
@@ -1177,6 +1464,46 @@ function stripBase64FromDataUrl(dataUrl) {
     const commaIndex = dataUrl.indexOf(",");
 
     return commaIndex === -1 ? dataUrl : dataUrl.slice(commaIndex + 1);
+}
+
+function pngDimensionsFromBase64(base64Data) {
+    const cleanBase64 = String(base64Data || "").replace(/\s+/g, "");
+
+    if (!cleanBase64) {
+        return null;
+    }
+
+    try {
+        const header = atob(cleanBase64.slice(0, 64));
+        const bytes = Array.from(header.slice(0, 24), (character) => character.charCodeAt(0));
+        const pngSignature = [137, 80, 78, 71, 13, 10, 26, 10];
+        const isPng = pngSignature.every((byte, index) => bytes[index] === byte);
+
+        if (!isPng || bytes.length < 24) {
+            return null;
+        }
+
+        const width = (
+            (bytes[16] * 16777216) +
+            (bytes[17] << 16) +
+            (bytes[18] << 8) +
+            bytes[19]
+        );
+        const height = (
+            (bytes[20] * 16777216) +
+            (bytes[21] << 16) +
+            (bytes[22] << 8) +
+            bytes[23]
+        );
+
+        if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+            return null;
+        }
+
+        return { width, height };
+    } catch {
+        return null;
+    }
 }
 
 function captureVisibleTabDataUrl(windowId) {
@@ -1535,6 +1862,12 @@ async function setOffscreenKeepAlive(active) {
 }
 
 async function takeScreenshotBase64(tab, run) {
+    const capture = await takeScreenshotCapture(tab, run);
+
+    return capture.base64;
+}
+
+async function takeScreenshotCapture(tab, run) {
     ensureRunActive(run);
     const dataUrl = await captureVisibleTabDataUrl(tab.windowId);
     ensureRunActive(run);
@@ -1543,7 +1876,11 @@ async function takeScreenshotBase64(tab, run) {
     const base64Data = await sanitizeScreenshotDataUrl(dataUrl, sanitizerTargets);
     ensureRunActive(run);
 
-    return base64Data;
+    return {
+        base64: base64Data,
+        dimensions: pngDimensionsFromBase64(base64Data) ||
+            pngDimensionsFromBase64(stripBase64FromDataUrl(dataUrl)),
+    };
 }
 
 function screenshotDataUrlFromBase64(base64Data) {
@@ -1707,7 +2044,7 @@ function isPayloadTooLargeAgentResponse(response) {
         isPayloadTooLargeAgentError(response.error || response.message || response);
 }
 
-async function retryAgentWithScreenshotOnly({ run, query, tab, step, screenshotBase64, secrets }) {
+async function retryAgentWithScreenshotOnly({ run, query, tab, step, screenshotBase64, screenshotSize, secrets }) {
     const retryMessageId = makeRequestId();
     const retryMessage = `Step ${step + 1}: request was too large. Retrying with screenshot only.`;
 
@@ -1717,10 +2054,18 @@ async function retryAgentWithScreenshotOnly({ run, query, tab, step, screenshotB
     });
 
     let retryScreenshotBase64 = screenshotBase64;
+    let retryScreenshotSize = screenshotSize || (
+        retryScreenshotBase64
+            ? pngDimensionsFromBase64(retryScreenshotBase64)
+            : null
+    );
 
     if (!retryScreenshotBase64) {
         try {
-            retryScreenshotBase64 = await takeScreenshotBase64(tab, run);
+            const retryScreenshot = await takeScreenshotCapture(tab, run);
+
+            retryScreenshotBase64 = retryScreenshot.base64;
+            retryScreenshotSize = retryScreenshot.dimensions;
         } catch (error) {
             await updateChatMessage(retryMessageId, {
                 text: `${retryMessage}\nScreenshot capture failed: ${error.message}`,
@@ -1737,7 +2082,7 @@ async function retryAgentWithScreenshotOnly({ run, query, tab, step, screenshotB
         `${retryMessage}\nScreenshot sent to server.`
     );
 
-    return callAgent({
+    const response = await callAgent({
         run,
         query,
         browser: buildScreenshotOnlyBrowserContext(),
@@ -1745,6 +2090,11 @@ async function retryAgentWithScreenshotOnly({ run, query, tab, step, screenshotB
         secrets,
         screenshotOnly: true,
     });
+
+    return {
+        response,
+        screenshotSize: retryScreenshotSize,
+    };
 }
 
 function getSecretValue(secrets, secretKey) {
@@ -1761,30 +2111,44 @@ function isExecutableAction(action) {
     return action?.type && !["request_screenshot", "request_user_input"].includes(action.type);
 }
 
-async function executeAction(run, tab, action, secrets) {
+function isCoordinateTargetedAction(action) {
+    return ["click", "move", "type_text"].includes(action?.type) &&
+        !action.element_id &&
+        Number.isFinite(Number(action.x)) &&
+        Number.isFinite(Number(action.y));
+}
+
+async function executeAction(run, tab, action, secrets, screenshotSize) {
     ensureRunActive(run);
 
     if (!isExecutableAction(action)) {
-        return;
+        return false;
     }
 
     if (action.type === "wait") {
         await abortableSleep(Number(action.milliseconds ?? 1000), run);
-        return;
+        return false;
     }
 
     const secretValue = action.type === "type_secret"
         ? getSecretValue(secrets, action.secret_key)
         : null;
 
-    await executeScript(tab.id, executeAgentActionInPage, [action, secretValue]);
+    const result = await executeScript(tab.id, executeAgentActionInPage, [action, secretValue, screenshotSize]);
     ensureRunActive(run);
+
+    return Boolean(result?.coordinateTargeted) || isCoordinateTargetedAction(action);
 }
 
-async function executeActions(run, tab, actions, secrets) {
+async function executeActions(run, tab, actions, secrets, screenshotSize) {
+    let usedCoordinateTarget = false;
+
     for (const action of actions) {
-        await executeAction(run, tab, action, secrets);
+        usedCoordinateTarget = await executeAction(run, tab, action, secrets, screenshotSize) ||
+            usedCoordinateTarget;
     }
+
+    return usedCoordinateTarget;
 }
 
 function formatUserInputRequest(actions) {
@@ -1888,7 +2252,9 @@ async function runBrowserAgent(run, query) {
     await registerManualActionStopper(tab, run);
 
     let screenshotBase64 = null;
+    let screenshotSize = null;
     let screenshotOnlyMode = false;
+    let forceScreenshotNextStep = false;
 
     for (let step = 0; step < MAX_AGENT_STEPS; step += 1) {
         ensureRunActive(run);
@@ -1905,9 +2271,16 @@ async function runBrowserAgent(run, query) {
             ? buildScreenshotOnlyBrowserContext()
             : await buildBrowserContext(tab, run);
 
-        if (screenshotOnlyMode || await getAttachScreenshotSetting()) {
+        const mustCaptureScreenshot = screenshotOnlyMode || forceScreenshotNextStep;
+        const shouldCaptureScreenshot = mustCaptureScreenshot || await getAttachScreenshotSetting();
+
+        if (shouldCaptureScreenshot) {
             try {
-                screenshotBase64 = await takeScreenshotBase64(tab, run);
+                const screenshot = await takeScreenshotCapture(tab, run);
+
+                screenshotBase64 = screenshot.base64;
+                screenshotSize = screenshot.dimensions;
+                forceScreenshotNextStep = false;
             } catch (error) {
                 await appendChat(
                     "received",
@@ -1915,8 +2288,9 @@ async function runBrowserAgent(run, query) {
                 );
 
                 screenshotBase64 = null;
+                screenshotSize = null;
 
-                if (screenshotOnlyMode) {
+                if (mustCaptureScreenshot) {
                     run.finalStatus = "screenshot_failed";
                     return;
                 }
@@ -1924,6 +2298,7 @@ async function runBrowserAgent(run, query) {
         }
 
         let response;
+        let agentScreenshotSize = screenshotBase64 ? screenshotSize : null;
 
         try {
             response = await callAgent({
@@ -1940,28 +2315,36 @@ async function runBrowserAgent(run, query) {
             }
 
             screenshotOnlyMode = true;
-            response = await retryAgentWithScreenshotOnly({
+            const retryResult = await retryAgentWithScreenshotOnly({
                 run,
                 query,
                 tab,
                 step,
                 screenshotBase64,
+                screenshotSize,
                 secrets,
             });
+
+            response = retryResult.response;
+            agentScreenshotSize = retryResult.screenshotSize;
         }
 
         ensureRunActive(run);
 
         if (!screenshotOnlyMode && isPayloadTooLargeAgentResponse(response)) {
             screenshotOnlyMode = true;
-            response = await retryAgentWithScreenshotOnly({
+            const retryResult = await retryAgentWithScreenshotOnly({
                 run,
                 query,
                 tab,
                 step,
                 screenshotBase64,
+                screenshotSize,
                 secrets,
             });
+
+            response = retryResult.response;
+            agentScreenshotSize = retryResult.screenshotSize;
             ensureRunActive(run);
         }
 
@@ -1971,6 +2354,7 @@ async function runBrowserAgent(run, query) {
             : [];
 
         screenshotBase64 = null;
+        screenshotSize = null;
 
         const responseMessage = agentMessageText(response);
 
@@ -1992,7 +2376,10 @@ async function runBrowserAgent(run, query) {
             });
 
             try {
-                screenshotBase64 = await takeScreenshotBase64(tab, run);
+                const screenshot = await takeScreenshotCapture(tab, run);
+
+                screenshotBase64 = screenshot.base64;
+                screenshotSize = screenshot.dimensions;
                 await appendScreenshotPreview(step, screenshotBase64, screenshotMessageId);
             } catch (error) {
                 await updateChatMessage(screenshotMessageId, {
@@ -2024,8 +2411,19 @@ async function runBrowserAgent(run, query) {
                 "received",
                 responseMessage || `Step ${step + 1}: executing ${executableActions.length} action(s).`
             );
-            await executeActions(run, tab, executableActions, secrets);
+            const usedCoordinateTarget = await executeActions(
+                run,
+                tab,
+                executableActions,
+                secrets,
+                agentScreenshotSize
+            );
             await abortableSleep(AGENT_ACTION_SETTLE_MS, run);
+
+            if (usedCoordinateTarget) {
+                forceScreenshotNextStep = true;
+            }
+
             continue;
         }
 

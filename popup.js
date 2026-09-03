@@ -551,7 +551,6 @@ function renderChat(messages) {
 
     if (chatMessages.length === 0) {
         appendMessage("received", "Enter a prompt to run PRISM on the active tab.");
-        elements.chat.appendChild(createQuickFillElement());
         elements.chat.scrollTop = elements.chat.scrollHeight;
         return;
     }
